@@ -1,0 +1,20 @@
+{
+  "ranges": [
+    {
+      "start_chapter": 5,
+      "start_verse": 3,
+      "end_chapter": 7,
+      "end_verse": 27,
+      "origin": "manual",
+      "note": "Sermon on the Mount — Jesus' direct address from Matthew 5:3 (first beatitude) through 7:27 (parable of the wise/foolish builders). 7:28-29 is Matthew's narrative coda."
+    },
+    {
+      "start_chapter": 11,
+      "start_verse": 28,
+      "end_chapter": 11,
+      "end_verse": 30,
+      "origin": "manual",
+      "note": "\"Come to Me, all you who are weary and burdened\" — three sayings of Jesus."
+    }
+  ]
+}

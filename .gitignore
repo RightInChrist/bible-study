@@ -1,0 +1,42 @@
+# Build artifacts (Reliability §Static-site atomic swap creates dist.tmp/ and dist.bak/)
+dist/
+dist.tmp/
+dist.bak/
+
+# Runtime data (gitignored per Hard decision #7 — SQLite is rebuildable)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Upstream raw downloads (large; the manifest pins their SHA-256 so a
+# fresh download is byte-verified before the normalizer runs).
+fixtures/_upstream/
+
+# Secrets
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+.vite/
+dist-ssr/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

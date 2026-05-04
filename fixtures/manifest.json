@@ -1,0 +1,112 @@
+{
+  "version": "2026.05-02-mat-full",
+  "segmenter": {
+    "edition": "sblgnt",
+    "rule": "sblgnt-punctuation-v1"
+  },
+  "byzantine_mode": "verse-only-v1",
+  "word_tokenizer": "greek-letters-with-clitics-v1",
+  "source_snapshot_canon_version": "v1",
+  "files": [
+    {
+      "name": "sblgnt-matthew",
+      "path": "fixtures/sblgnt/matthew.txt",
+      "source_url": "https://raw.githubusercontent.com/Faithlife/SBLGNT/master/data/sblgnt/text/Matt.txt",
+      "retrieved_at": "2026-05-03T20:32:00Z",
+      "release_tag": "Faithlife/SBLGNT@a785c74fa38fc5d36a16f7cbb36960dff5364cc4",
+      "sha256": "96e692ef9bfb10e7065726887df4cfcc18a62aff4576325cfae0bedcd17e35de",
+      "upstream_path": "fixtures/_upstream/sblgnt-Matt.txt",
+      "upstream_sha256": "4fa718540cbc6330591b233c99c68bbf52b85afc90016e4188efe5cd9719eeb0",
+      "normalizer": "scripts/normalize_sblgnt.py"
+    },
+    {
+      "name": "byzantine-matthew",
+      "path": "fixtures/byzantine/matthew.txt",
+      "source_url": "https://raw.githubusercontent.com/byztxt/byzantine-majority-text/master/csv-unicode/strongs/no-parsing/MAT.csv",
+      "retrieved_at": "2026-05-03T20:32:00Z",
+      "release_tag": "byztxt/byzantine-majority-text@97371d743648c7370e61a061759619116ae55aec",
+      "sha256": "6bcd13f0c9e31b6a3979bf6aecf5d2604c08b50aa95f44b243a1e694457b86ef",
+      "upstream_path": "fixtures/_upstream/byzantine-MAT.csv",
+      "upstream_sha256": "f3e2dc0d23e97578ffcad39fd67a37b46392f43026e87c82ea18e9fe38ec792d",
+      "normalizer": "scripts/normalize_byzantine.py"
+    },
+    {
+      "name": "bsb-matthew",
+      "path": "fixtures/bsb/matthew.txt",
+      "source_url": "https://bereanbible.com/bsb.txt",
+      "retrieved_at": "2026-05-03T20:32:00Z",
+      "release_tag": "bsb-2025-12-24",
+      "sha256": "c78662fb19f566f8ed097ef6183194ec1eef0b3cd7a2b837d3770b31401cf481",
+      "upstream_path": "fixtures/_upstream/bsb.txt",
+      "upstream_sha256": "4ff20e60a9e12e2150b49caaa5e757936751c142a3ca0926ac82e11152f7676f",
+      "normalizer": "scripts/normalize_berean_english.py"
+    },
+    {
+      "name": "blb-matthew",
+      "path": "fixtures/blb/matthew.txt",
+      "source_url": "https://literalbible.com/blb.txt",
+      "retrieved_at": "2026-05-03T20:32:00Z",
+      "release_tag": "blb-draft-2025-12",
+      "sha256": "9993b11fbf0dd831a31313aceba46294562239ef5113caf0f581b96e75048e2f",
+      "upstream_path": "fixtures/_upstream/blb.txt",
+      "upstream_sha256": "4db24ae985c244ba83538f5e6e39ab7f3a1d027a6ffe8b1292e503f6dcd88054",
+      "normalizer": "scripts/normalize_berean_english.py"
+    },
+    {
+      "name": "web-matthew",
+      "path": "fixtures/web/matthew.txt",
+      "source_url": "https://ebible.org/Scriptures/eng-web_usfm.zip#70-MATeng-web.usfm",
+      "retrieved_at": "2026-05-03T20:32:00Z",
+      "release_tag": "eng-web-2026-04-23",
+      "sha256": "94f5e64f44c61575f4eef691f3cccadcc7079eff9eb4c02376cb2d02e9aebb57",
+      "upstream_path": "fixtures/_upstream/web-Matt.usfm",
+      "upstream_sha256": "1996298469ae3b9f851b9595ef74b01be8eb24253af59d98e3d7fbccaee0fab8",
+      "normalizer": "scripts/normalize_web.py"
+    },
+    {
+      "name": "bib-matthew",
+      "path": "fixtures/bib/matthew.tsv",
+      "source_url": "https://bereanbible.com/bsb_tables.tsv",
+      "retrieved_at": "2026-05-03T20:32:00Z",
+      "release_tag": "bsb-tables-2026-01-15",
+      "sha256": "a014d5e43a34a587147489b9e2b09bb3e59276f3453dab05ed1323da76326abd",
+      "upstream_path": "fixtures/_upstream/bsb_tables.tsv",
+      "upstream_sha256": "5669d83e67aa3898d0f010762066c383163cd313e8d8c88cb6c541bdc4fa9d11",
+      "normalizer": "scripts/normalize_bib.py"
+    },
+    {
+      "name": "red-letters-matthew",
+      "path": "fixtures/red_letters/matthew.json",
+      "source_url": "hand-curated",
+      "retrieved_at": "2026-05-03T20:32:00Z",
+      "release_tag": "manual-mat-full-v1",
+      "sha256": "e06c6dd0f15692a7408371a49e4fdcb5302e47d53fe8ab5934d748492928d5e3"
+    }
+  ],
+  "prompts": [
+    {
+      "name": "literal",
+      "version": "literal-v1",
+      "path": "fixtures/prompts/literal-v1.md",
+      "sha256": "718c7316b424a60094ed3dedbc124e6d0a41d3f73f1f14560f75cd05f7287ea5"
+    },
+    {
+      "name": "dynamic",
+      "version": "dynamic-v1",
+      "path": "fixtures/prompts/dynamic-v1.md",
+      "sha256": "d480751903953ffda9b919c3c172ddd618870108a4a33880e34e359374fb2832"
+    },
+    {
+      "name": "plainspoken",
+      "version": "plainspoken-v1",
+      "path": "fixtures/prompts/plainspoken-v1.md",
+      "sha256": "db53016a3db19b8605424b043738d2f7313b4493221fd33556b88347681e1fa5"
+    },
+    {
+      "name": "first-century-jewish",
+      "version": "first-century-jewish-v1",
+      "path": "fixtures/prompts/first-century-jewish-v1.md",
+      "sha256": "c0e9394a0bda87a1f5dc66b9b4459eda01f5f607262cd88f8855cedd0690243c"
+    }
+  ]
+}
