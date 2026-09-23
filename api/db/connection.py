@@ -33,7 +33,13 @@ def open_connection(db_path: Path | None = None) -> sqlite3.Connection:
     if db_path is None:
         db_path = get_settings().database_path_absolute
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), isolation_level=None, timeout=10.0)
+    # check_same_thread=False: FastAPI runs the request-scoped dependency's
+    # setup, the sync route, and the teardown on different threadpool
+    # workers, so a connection is legitimately handed between threads (one
+    # at a time). The linked SQLite is built serialized (threadsafety == 3).
+    conn = sqlite3.connect(
+        str(db_path), isolation_level=None, timeout=10.0, check_same_thread=False
+    )
     conn.row_factory = sqlite3.Row
     _apply_pragmas(conn)
     return conn
