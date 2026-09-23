@@ -69,20 +69,15 @@ def configured_settings(
     reset_settings_cache()
 
 
-def _apply_0001_init(db_path: Path) -> None:
-    """Apply the bootstrap migration via raw sqlite3 — alembic's machinery
-    adds ~9s of overhead per call, which the dedicated migration test
-    (``test_alembic_migration_0001_creates_all_tables``) keeps covered.
+def _capture_revision_sql(module_name: str) -> list[str]:
+    """Capture ``op.execute`` calls from a revision's ``upgrade()`` body.
 
-    We capture each ``op.execute`` from ``api.migrations.versions.0001_init``'s
-    ``upgrade()`` body and replay them inside one BEGIN..COMMIT against
-    sqlite3 directly. The captured-SQL list is byte-equivalent to what
-    Alembic would emit, so this is a faithful application of the revision.
+    Used to replay the SQL into a sqlite3 connection directly, bypassing
+    alembic's ~9s startup cost. The dedicated migration test
+    (``test_alembic_migration_0001_creates_all_tables``) keeps the real
+    ``alembic.command.upgrade`` path covered.
     """
-    import sqlite3
-
-    revision_module = importlib.import_module("api.migrations.versions.0001_init")
-
+    revision_module = importlib.import_module(module_name)
     captured: list[str] = []
 
     class _RecordingOp:
@@ -97,6 +92,25 @@ def _apply_0001_init(db_path: Path) -> None:
         revision_module.upgrade()
     finally:
         op_module.execute = original  # type: ignore[assignment]
+    return captured
+
+
+def _apply_0001_init(db_path: Path) -> None:
+    """Apply the bootstrap migration + 0002 + 0003 via raw sqlite3.
+
+    See :func:`_capture_revision_sql` for the rationale (alembic
+    overhead). All three are applied so a partial state isn't observable
+    to tests.
+    """
+    import sqlite3
+
+    captured = _capture_revision_sql("api.migrations.versions.0001_init")
+    captured_0002 = _capture_revision_sql(
+        "api.migrations.versions.0002_runs_no_dollar_cost"
+    )
+    captured_0003 = _capture_revision_sql(
+        "api.migrations.versions.0003_chapter_summaries"
+    )
 
     conn = sqlite3.connect(str(db_path))
     try:
@@ -104,11 +118,15 @@ def _apply_0001_init(db_path: Path) -> None:
         conn.execute("BEGIN")
         for sql in captured:
             conn.execute(sql)
+        for sql in captured_0002:
+            conn.execute(sql)
+        for sql in captured_0003:
+            conn.execute(sql)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)"
         )
         conn.execute(
-            "INSERT INTO alembic_version (version_num) VALUES ('0001_init')"
+            "INSERT INTO alembic_version (version_num) VALUES ('0003_chapter_summaries')"
         )
         conn.execute("COMMIT")
     finally:
@@ -150,21 +168,21 @@ def writable_headers() -> dict[str, str]:
 
 
 @pytest.fixture
-def runs_client(imported_db: Path) -> Iterator[tuple[TestClient, "FakeClaudeClient"]]:
-    """A TestClient with the Anthropic client dependency overridden.
+def runs_client(imported_db: Path) -> Iterator[tuple[TestClient, "FakeWorktreeSpawner"]]:
+    """A TestClient with the worktree-spawner dependency overridden.
 
     Returns ``(client, fake)`` so tests can pre-configure responses on
-    ``fake`` (stubbed candidate text, latency, responder callbacks) and
+    ``fake`` (stubbed candidate dict, latency, responder callbacks) and
     inspect ``fake.calls`` after.
     """
     get_commit_hash.cache_clear()
     from api.main import create_app
-    from api.runs.routes import get_claude_client
-    from api.tests.fakes import FakeClaudeClient
+    from api.runs.routes import get_worktree_spawner
+    from api.tests.fakes import FakeWorktreeSpawner
 
     app = create_app()
-    fake = FakeClaudeClient()
-    app.dependency_overrides[get_claude_client] = lambda: fake
+    fake = FakeWorktreeSpawner()
+    app.dependency_overrides[get_worktree_spawner] = lambda: fake
     test_client = TestClient(app, base_url="http://127.0.0.1:8000")
     yield test_client, fake
     test_client.close()
@@ -172,4 +190,4 @@ def runs_client(imported_db: Path) -> Iterator[tuple[TestClient, "FakeClaudeClie
 
 # Re-export for typing in the fixture above. Imported lazily so test
 # collection doesn't bring the whole runtime tree.
-from api.tests.fakes import FakeClaudeClient  # noqa: E402
+from api.tests.fakes import FakeWorktreeSpawner  # noqa: E402

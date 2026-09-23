@@ -1,4 +1,4 @@
-.PHONY: install dev dev-api dev-web test test-api test-web build-web import migrate clean seed-evals
+.PHONY: install dev dev-api dev-web test test-api test-web build-web build-static import migrate clean seed-evals
 
 PYTHON ?= .venv/bin/python
 PIP    ?= .venv/bin/pip
@@ -37,6 +37,13 @@ dev-web:
 
 build-web:
 	cd web && npm run build
+
+# `make build-static` runs the same pipeline as `POST /api/v1/admin/build-static`:
+# vite static build of the SPA + JSON snapshots emitted via the service
+# layer + grep guards on `dist.tmp/` + atomic swap to `dist/`. Calls the
+# admin service-layer function directly (no FastAPI process required).
+build-static:
+	PYTHONPATH=. $(PYTHON) -c "import asyncio; from pathlib import Path; from api.admin.service import run_build_static; r = asyncio.run(run_build_static(project_root=Path('.').resolve(), db_path=Path('data/bible_study.db').resolve(), include_unranked_placeholders=True)); print(f'built {r.dist_path} — {r.files_written} files in {r.took_ms} ms; coverage {r.coverage.ranked}/{r.coverage.total}')"
 
 test: test-api test-web
 

@@ -32,6 +32,17 @@ function resolveUrl(path: string): string {
   }
   if (STATIC_BUILD) {
     const [base, query] = path.split("?", 2);
+    // Sentences-by-chapter is emitted as one file per chapter under
+    // `/api/v1/sentences/chapter-N.json` — see api/admin/service.py
+    // _emit_snapshots. The dev API takes `?chapter=N`; the static
+    // resolver translates `?chapter=N` → the per-chapter file.
+    if (base === "/api/v1/sentences" && typeof query === "string") {
+      const params = new URLSearchParams(query);
+      const chapter = params.get("chapter");
+      if (chapter !== null) {
+        return `/api/v1/sentences/chapter-${chapter}.json`;
+      }
+    }
     const queryFragment = typeof query === "string" ? `?${query}` : "";
     return `${base}.json${queryFragment}`;
   }
@@ -67,6 +78,45 @@ export async function apiFetch<T>(
     throw new ApiError(response.status, body, message);
   }
   return parsed as T;
+}
+
+/**
+ * Variant of `apiFetch` that returns the raw response body as a string.
+ * Used by GSV's text and markdown formats — the server returns
+ * `text/plain` / `text/markdown` bodies, not JSON. Errors still come
+ * back as the canonical `ErrorResponse` JSON shape (e.g. 409
+ * `unresolved_ties`), which we parse and surface via `ApiError` so the
+ * caller can introspect `err.body.code`.
+ */
+export async function apiFetchText(
+  path: string,
+  init: RequestInit = {},
+): Promise<string> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers = new Headers(init.headers);
+  // Don't force Accept: application/json — let the server pick from
+  // text/plain / text/markdown / application/json based on the route's
+  // content-type. The route handler returns JSON only for errors.
+  if (method !== "GET" && method !== "HEAD") {
+    headers.set("X-Requested-By", "bible-study-ui");
+    if (!headers.has("Content-Type") && init.body !== undefined) {
+      headers.set("Content-Type", "application/json");
+    }
+  }
+  const response = await fetch(resolveUrl(path), { ...init, headers });
+  const text = await response.text();
+  if (!response.ok) {
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+    const body = isErrorResponse(parsed) ? parsed : null;
+    const message = body?.message ?? `HTTP ${response.status} for ${path}`;
+    throw new ApiError(response.status, body, message);
+  }
+  return text;
 }
 
 function isErrorResponse(x: unknown): x is ErrorResponse {

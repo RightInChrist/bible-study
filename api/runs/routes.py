@@ -13,7 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.admin.schemas import ErrorResponse
-from api.claude.client import AnthropicClaudeClient, ClaudeClient
+from api.claude.worktree import ClaudeCodeWorktreeSpawner, WorktreeSpawner
 from api.deps import db_connection
 from api.runs.runner import (
     RunCreationError,
@@ -34,59 +34,25 @@ from api.settings import get_settings
 router = APIRouter(prefix="/api/v1", tags=["runs"])
 
 
-_PROCESS_CLAUDE_CLIENT: ClaudeClient | None = None
+_PROCESS_WORKTREE_SPAWNER: WorktreeSpawner | None = None
 
 
-def get_claude_client() -> ClaudeClient:
+def get_worktree_spawner() -> WorktreeSpawner:
     """FastAPI dependency — process-wide single instance.
 
-    Tests override via ``app.dependency_overrides[get_claude_client]``.
+    Tests override via ``app.dependency_overrides[get_worktree_spawner]``
+    with :class:`api.tests.fakes.FakeWorktreeSpawner`. Production wires
+    the real :class:`ClaudeCodeWorktreeSpawner` which spawns the
+    ``claude`` CLI inside a fresh git worktree per generation.
 
-    Eval-harness path: when ``settings.bible_study_fake_claude`` is true
-    AND ``env == 'development'``, return a deterministic fake. The
-    env-gate matches Security §Authn / Authz: a public-facing
-    deployment must never accept a flag that bypasses the real Anthropic
-    integration.
+    No env-var fake selection — the runtime spawner is always real;
+    tests inject the fake explicitly. (Slice 3a-pre-redo selected the
+    fake via ``BIBLE_STUDY_FAKE_CLAUDE``; that env-var path is gone.)
     """
-    global _PROCESS_CLAUDE_CLIENT
-    if _PROCESS_CLAUDE_CLIENT is None:
-        settings = get_settings()
-        if settings.bible_study_fake_claude and settings.env == "development":
-            _PROCESS_CLAUDE_CLIENT = _build_eval_fake_claude_client()
-        else:
-            _PROCESS_CLAUDE_CLIENT = AnthropicClaudeClient()
-    return _PROCESS_CLAUDE_CLIENT
-
-
-def _build_eval_fake_claude_client() -> ClaudeClient:
-    """Build a deterministic fake-Claude client for the ``bs/run/`` eval.
-
-    The candidate text is derived from ``sentence_id`` so the eval can
-    assert on a stable string, and ``api_key_set=True`` so the runner's
-    pre-flight check passes without a real key.
-    """
-    from datetime import UTC, datetime
-
-    from api.claude.client import ClaudeCallRequest
-    from api.claude.schemas import CandidateGenerated
-
-    class _Fake:
-        @property
-        def api_key_set(self) -> bool:
-            return True
-
-        async def generate(self, request: ClaudeCallRequest) -> CandidateGenerated:
-            return CandidateGenerated(
-                candidate_text=(
-                    f"[fake-claude] translation of {request.bundle.sentence_id} "
-                    f"({request.bundle.verse_range})"
-                ),
-                model=request.model,
-                generated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                latency_ms=1,
-            )
-
-    return _Fake()
+    global _PROCESS_WORKTREE_SPAWNER
+    if _PROCESS_WORKTREE_SPAWNER is None:
+        _PROCESS_WORKTREE_SPAWNER = ClaudeCodeWorktreeSpawner()
+    return _PROCESS_WORKTREE_SPAWNER
 
 
 def _domain_error_to_http(exc: RunCreationError) -> HTTPException:
@@ -108,16 +74,11 @@ def _domain_error_to_http(exc: RunCreationError) -> HTTPException:
 )
 async def create_run_route(
     body: CreateRunRequest,
-    claude_client: ClaudeClient = Depends(get_claude_client),
+    spawner: WorktreeSpawner = Depends(get_worktree_spawner),
 ) -> RunResponse:
     """Async on purpose — ``schedule_run`` calls ``asyncio.create_task``
     which needs the running event loop. Sync routes execute on the
     threadpool where no loop is available.
-
-    Opens the SQLite connection inside the route (not via ``Depends``) so
-    it lives on the same thread as the asyncio event loop. SQLite
-    objects are thread-bound; the dependency's separate-thread origin
-    would surface as ``ProgrammingError`` here.
     """
     from api.db.connection import open_connection
 
@@ -131,7 +92,8 @@ async def create_run_route(
                 style_prompt_version=body.style_prompt_version,
                 source_set_id=body.source_set_id,
                 model=body.model,
-                claude_client=claude_client,
+                effort=body.effort,
+                spawner=spawner,
                 project_root=settings.project_root,
             )
         except RunCreationError as exc:
@@ -143,9 +105,14 @@ async def create_run_route(
             style_prompt_version=body.style_prompt_version,
             source_set_id=body.source_set_id,
             model=body.model,
+            effort=body.effort,
             project_root=settings.project_root,
             db_path=settings.database_path_absolute,
-            claude_client=claude_client,
+            spawner=spawner,
+            wants_context_window=result.wants_context_window,
+            context_window_before=result.context_window_before,
+            context_window_after=result.context_window_after,
+            chapter=result.chapter,
         )
 
         return get_run(conn, result.run_id)
@@ -180,13 +147,6 @@ def get_run_route(
 
 @router.get("/runs/{run_id}/stream")
 async def stream_run_route(run_id: str):
-    """SSE stream for a run.
-
-    Opens the connection inline (not via ``Depends``) to keep SQLite on
-    the event loop's thread; see ``create_run_route`` for the same
-    rationale. The stream itself opens its own short-lived connections
-    in ``api.runs.sse`` for replay queries.
-    """
     from api.db.connection import open_connection
 
     conn = open_connection()

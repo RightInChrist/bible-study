@@ -5,10 +5,10 @@ The static-site builder calls these directly per Hard decision #6;
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from api.errors import DomainError
-from api.runs.runner import _from_x10000
 from api.runs.schemas import (
     CandidateResponse,
     RunListItem,
@@ -50,18 +50,47 @@ def _ordered_sentence_ids(conn: sqlite3.Connection, run_id: str) -> list[str]:
     rows = conn.execute(
         """
         SELECT sentence_id FROM generation_run_items
-        WHERE run_id=? ORDER BY ordinal
+        WHERE run_id=? AND sentence_id IS NOT NULL
+        ORDER BY ordinal
         """,
         (run_id,),
     ).fetchall()
     return [r["sentence_id"] for r in rows]
 
 
+def _run_chapter(conn: sqlite3.Connection, run_id: str, scope_json: str) -> int | None:
+    """Return the chapter number for a chapter-summary scope run, else None.
+
+    Reads the chapter from ``generation_run_items.chapter`` first (it's
+    set on the single chapter item); falls back to the scope_json
+    discriminator if needed.
+    """
+    row = conn.execute(
+        """
+        SELECT chapter FROM generation_run_items
+        WHERE run_id=? AND chapter IS NOT NULL
+        ORDER BY ordinal LIMIT 1
+        """,
+        (run_id,),
+    ).fetchone()
+    if row is not None:
+        return int(row["chapter"])
+    try:
+        scope = json.loads(scope_json)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(scope, dict) and scope.get("kind") == "chapter_summary":
+        ch = scope.get("chapter")
+        if isinstance(ch, int):
+            return ch
+    return None
+
+
 def get_run(conn: sqlite3.Connection, run_id: str) -> RunResponse:
     row = conn.execute(
         """
-        SELECT run_id, status, style_prompt_version, source_set_id, model,
-               estimated_cost_usd_x10000, parent_run_id, created_at,
+        SELECT run_id, status, scope_json, style_prompt_version, source_set_id, model,
+               estimated_worktree_count, parent_run_id, created_at,
                started_at, completed_at
         FROM generation_runs WHERE run_id=?
         """,
@@ -75,6 +104,7 @@ def get_run(conn: sqlite3.Connection, run_id: str) -> RunResponse:
     counts = _item_status_counts(conn, run_id)
     items_count = sum(counts.values())
     sentence_ids = _ordered_sentence_ids(conn, run_id)
+    chapter = _run_chapter(conn, run_id, row["scope_json"])
     return RunResponse(
         run_id=row["run_id"],
         status=row["status"],
@@ -88,9 +118,9 @@ def get_run(conn: sqlite3.Connection, run_id: str) -> RunResponse:
         items_running=counts["running"],
         items_cancelled=counts["cancelled"],
         items_interrupted=counts["interrupted"],
-        estimated_cost_usd=_from_x10000(int(row["estimated_cost_usd_x10000"])),
-        estimated_cost_usd_band_pct=20,
+        estimated_worktree_count=int(row["estimated_worktree_count"]),
         sentence_ids=sentence_ids,
+        chapter=chapter,
         parent_run_id=row["parent_run_id"],
         created_at=row["created_at"],
         started_at=row["started_at"],
@@ -102,7 +132,7 @@ def list_runs(conn: sqlite3.Connection, limit: int = 50) -> RunListResponse:
     rows = conn.execute(
         """
         SELECT run_id, status, style_prompt_version, source_set_id, model,
-               estimated_cost_usd_x10000, created_at, completed_at
+               estimated_worktree_count, created_at, completed_at
         FROM generation_runs
         ORDER BY created_at DESC
         LIMIT ?
@@ -123,7 +153,7 @@ def list_runs(conn: sqlite3.Connection, limit: int = 50) -> RunListResponse:
                 items_count=items_count,
                 items_completed=counts["completed"],
                 items_failed=counts["failed"],
-                estimated_cost_usd=_from_x10000(int(row["estimated_cost_usd_x10000"])),
+                estimated_worktree_count=int(row["estimated_worktree_count"]),
                 created_at=row["created_at"],
                 completed_at=row["completed_at"],
             )

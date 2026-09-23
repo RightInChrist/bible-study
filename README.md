@@ -39,11 +39,26 @@ test-only admin hooks, frontend.
 
 ```bash
 make install               # build .venv + install deps
-make migrate               # apply the 0001_init alembic revision
+make migrate               # apply alembic head (currently 0002_runs_no_dollar_cost)
 make import                # hash-verify fixtures and load into SQLite
 make dev                   # run the FastAPI server on http://127.0.0.1:8000
 make test                  # run the pytest suite
 ```
+
+### Claude Code prerequisite (Slice 3a-redo)
+
+Translation generation spawns the `claude` CLI in a git worktree per
+sentence (CLAUDE.md §Generation mechanism). For runs to work:
+
+```bash
+which claude               # must resolve (Claude Code must be installed)
+claude --version           # must succeed (subscription must be logged in)
+```
+
+The bible-study process never sees an API key — it relies on whatever
+Claude Code is already authenticated as on the local machine. The
+runner sanity-checks `claude --version` at run-creation time and rejects
+with `claude_cli_unavailable` if the CLI isn't reachable.
 
 ## Repository layout
 

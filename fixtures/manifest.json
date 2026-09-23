@@ -88,25 +88,31 @@
       "name": "literal",
       "version": "literal-v1",
       "path": "fixtures/prompts/literal-v1.md",
-      "sha256": "718c7316b424a60094ed3dedbc124e6d0a41d3f73f1f14560f75cd05f7287ea5"
+      "sha256": "e658d661668e94c5cd653fe316d02fe196ac358f24d79e2d50a4d4f106082885"
     },
     {
       "name": "dynamic",
       "version": "dynamic-v1",
       "path": "fixtures/prompts/dynamic-v1.md",
-      "sha256": "d480751903953ffda9b919c3c172ddd618870108a4a33880e34e359374fb2832"
+      "sha256": "f569dfb15c9f8906e1e950aeb04f291e852d828482252a8457f0165c4b2abf4e"
     },
     {
       "name": "plainspoken",
       "version": "plainspoken-v1",
       "path": "fixtures/prompts/plainspoken-v1.md",
-      "sha256": "db53016a3db19b8605424b043738d2f7313b4493221fd33556b88347681e1fa5"
+      "sha256": "bde7bd19416cbe0bb68bac99c34c54a242dbcc50cedea3bb0d8538e7999c7d42"
     },
     {
       "name": "first-century-jewish",
       "version": "first-century-jewish-v1",
       "path": "fixtures/prompts/first-century-jewish-v1.md",
-      "sha256": "c0e9394a0bda87a1f5dc66b9b4459eda01f5f607262cd88f8855cedd0690243c"
+      "sha256": "95f34464eeddb2a2ce8bd00b9dfab2f770b7e9a3b22d7ec9a2be9e65f40150e2"
+    },
+    {
+      "name": "chapter-summary",
+      "version": "chapter-summary-v1",
+      "path": "fixtures/prompts/chapter-summary-v1.md",
+      "sha256": "17a1e2201af0f9d082ffcd276b698b99b07dd90dfd195bcf4d69f34f759ab2a1"
     }
   ]
 }

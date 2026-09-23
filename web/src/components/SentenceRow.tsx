@@ -14,15 +14,18 @@
  * batch endpoint without rewriting the components.
  */
 import { forwardRef } from "react";
+import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
 import type { SentenceListItem, SentenceParallelResponse } from "../api/types";
-import { useSentenceParallel } from "../api/hooks";
+import { useRanking, useSentenceParallel } from "../api/hooks";
 import type { FocalSentence, RefVerse } from "../lib/rendering";
 import { showsAnchorGlyph } from "../lib/rendering";
+import { AuthOnly } from "./AuthOnly";
 import { BibInterlinear } from "./BibInterlinear";
 import { CandidateList } from "./CandidateList";
 import { GenerateButton } from "./GenerateButton";
+import { RedLetterToggle } from "./RedLetterToggle";
 import { TranslationCell } from "./TranslationCell";
 
 interface Props {
@@ -165,7 +168,39 @@ export const SentenceRow = forwardRef<HTMLDivElement, Props>(function SentenceRo
       ) : null}
 
       <GenerateButton sentenceId={sentence.sentence_id} onCompleted={refreshCandidates} />
+      <AuthOnly>
+        <RankAffordance sentenceId={sentence.sentence_id} />
+      </AuthOnly>
+      <AuthOnly>
+        <RedLetterToggle sentence={sentence} />
+      </AuthOnly>
       <CandidateList sentenceId={sentence.sentence_id} />
     </div>
   );
 });
+
+function RankAffordance({ sentenceId }: { sentenceId: string }) {
+  const ranking = useRanking(sentenceId);
+  const hasSavedRanking =
+    ranking.data !== undefined && ranking.data.version > 0;
+  return (
+    <div className="rank-affordance" data-testid="rank-affordance">
+      <Link
+        to={`/sentence/${sentenceId}/rank`}
+        className="rank-affordance__link"
+        data-testid="rank-affordance__link"
+      >
+        Rank →
+      </Link>
+      {hasSavedRanking ? (
+        <span
+          className="rank-affordance__badge"
+          data-testid="rank-affordance__badge"
+          title="this sentence has a saved ranking"
+        >
+          ranked
+        </span>
+      ) : null}
+    </div>
+  );
+}

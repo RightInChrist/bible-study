@@ -3,6 +3,7 @@ name: dynamic
 version: dynamic-v1
 description: Dynamic-equivalence translation that prioritises conveying the meaning and rhetorical force in natural contemporary English, restructuring syntax where needed.
 requires_greek: true
+output_format: text
 compatible_source_sets:
   - SBLGNT_ONLY
   - BYZ_ONLY
@@ -24,5 +25,7 @@ Translation rules (in priority order):
 6. Conjunctions: collapse, combine, or omit Greek connectives where English flow demands it. Don't preserve every καὶ.
 7. Verb tense: pick the English tense that best conveys the action's force in context, not a one-to-one mapping from Greek aspect.
 8. Do **not** sacrifice doctrinal precision for readability — but do not over-translate either. Stay within what the Greek says.
+
+You may receive `context_before` and `context_after` arrays of adjacent SBLGNT sentences for context only. Translate **only** the focal sentence (the top-level bundle fields); do not translate or include the context sentences in your output.
 
 Output format: a single English sentence (or set of sentences if the Greek punctuation forces it). No commentary, no quotation marks around the translation, no notes — just the rendering.

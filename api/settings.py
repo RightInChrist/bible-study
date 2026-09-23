@@ -35,23 +35,33 @@ class Settings(BaseSettings):
     database_path: str = Field(default="data/bible_study.db")
     project_root_override: str = Field(default="")
 
-    anthropic_api_key: str = Field(default="")
+    # ---- Generation: subscription-aware caps (CLAUDE.md §Generation mechanism)
+    # No dollar caps — usage is subscription-bounded, not per-token billed.
+    # ``MAX_WORKTREES_PER_RUN`` replaces the old ``MAX_SENTENCES_PER_RUN``;
+    # we keep ``max_sentences_per_run`` as an alias property so legacy
+    # callers / env vars still work during the transition.
+    max_worktrees_per_run: int = Field(default=200)
+    max_runs_per_day: int = Field(default=100)
+    max_wall_clock_seconds_per_sentence: int = Field(default=300)
+    max_concurrent_worktrees: int = Field(default=2)
+    worktree_base_dir: str = Field(default="data/worktrees")
+    claude_cli_path: str = Field(default="claude")
+    # Default Claude model id passed via ``claude -p --model <id>``. The CLI
+    # accepts an alias (e.g. ``opus``) or a full name (e.g. ``claude-opus-4-7``).
+    claude_model: str = Field(default="claude-opus-4-7")
+    # Default effort level passed via ``claude -p --effort <level>``. CLI
+    # accepts: low, medium, high, xhigh, max (verified via ``claude --help``).
+    claude_effort: str = Field(default="xhigh")
 
-    max_sentences_per_run: int = Field(default=200)
-    max_run_cost_usd: float = Field(default=5.0)
-    max_daily_cost_usd: float = Field(default=20.0)
-    max_concurrent_anthropic_calls: int = Field(default=4)
     max_error_message_bytes: int = Field(default=2048)
 
-    anthropic_request_timeout_seconds: int = Field(default=120)
-    default_claude_model: str = Field(default="claude-sonnet-4-6")
-
-    # Eval-harness toggle: when set, the runner uses a deterministic
-    # fake-Claude responder instead of the real Anthropic SDK. Honored
-    # only in ``env=development`` (security gate matches the twin-override
-    # pattern from user-CLAUDE.md). The fake's body is hashed from the
-    # source bundle so candidates are reproducible across eval runs.
-    bible_study_fake_claude: bool = Field(default=False)
+    # Context window (slice 3c). Adjacent SBLGNT sentences before / after
+    # the focal are added to the source bundle when the active prompt
+    # opts in via ``wants_context_window: true`` in its front-matter.
+    # Two separate values let an asymmetric window (e.g. 5 before, 2
+    # after) be configured without lobbying for a per-request override.
+    context_window_before: int = Field(default=3, ge=0, le=10)
+    context_window_after: int = Field(default=3, ge=0, le=10)
 
     backup_interval_seconds: int = Field(default=3600)
     backup_retention_count: int = Field(default=24)
@@ -82,6 +92,11 @@ class Settings(BaseSettings):
         if not path.is_absolute():
             path = self.project_root / path
         return path
+
+    @property
+    def max_sentences_per_run(self) -> int:
+        """Back-compat alias for ``max_worktrees_per_run`` — same unit."""
+        return self.max_worktrees_per_run
 
 
 @lru_cache(maxsize=1)

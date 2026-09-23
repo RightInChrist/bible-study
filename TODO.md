@@ -2,6 +2,13 @@
 
 Tech debt, deferrals, and future work. Items move out of this file when they land in code or get explicitly dropped. Don't let it become a dumping ground — if something hasn't been touched in a long time, it's probably not actually wanted.
 
+## Follow-ups from the SPEC/PLAN cleanup pass
+
+The cleanup pass (this slice) reworked `SPEC.md` and `PLAN.md` to describe the worktree-subagent mechanism instead of the legacy Anthropic-SDK shape. Two follow-up items remained, neither blocking:
+
+- **Drop dead `error_code` values from the schema CHECK** (`anthropic_api_error`, `anthropic_refusal`, `rate_limit`). The worktree runner never emits them; PLAN now documents the live set as `claude_cli_unavailable | timeout | invalid_response | disk_full | internal`. Removing the dead values is a small forward-only Alembic revision (SQLite 3.35+ supports DROP-and-recreate via `batch_alter_table`). Defer to a slice that's already touching the schema so we don't migrate just for this.
+- **`evals/specs/bible-study/run.md` still references `BIBLE_STUDY_FAKE_CLAUDE=1`.** The env-var toggle is gone — the fake spawner is now wired via the `WorktreeSpawner` Protocol DI in `api/tests/fakes.py` and the runner accepts a spawner argument directly. Sweep the eval spec when next editing it.
+
 ## Verification (do before building)
 
 - [x] **Pin exact source files & checksums** for every ingested text. Slice 2 wired up SBLGNT (Faithlife/SBLGNT@a785c74), Byzantine (byztxt@97371d7), BSB / BLB (bereanbible.com / literalbible.com public-domain text downloads, retrieved 2026-05-03), BIB (`bsb_tables.tsv` interlinear, retrieved 2026-05-03), WEB (eng-web USFM 2026-04-23). Both upstream-file hashes and on-disk normalized-fixture hashes are pinned in `fixtures/manifest.json`.
@@ -27,7 +34,9 @@ In v1, Byzantine ships as **verse-keyed reference text only** — `SPEC.md` Mana
 
 ## Tech debt placeholders
 
-(Empty for now — repo has no code. Add items here as shortcuts get taken during implementation. Each entry should name the file/area, the shortcut, and the cost of leaving it.)
+- *(resolved in slice 6)* ~~Importer's TRUNCATE+INSERT phase blows up on FK from `claude_candidates.style_prompt_version` → `style_prompts.version` when the prompt body changes.~~ Slice 6 fixed it via two complementary changes in `api/importer/runner.py`: (a) the import txn now does `PRAGMA defer_foreign_keys = ON` so DELETE-then-INSERT cycles inside one transaction are checked at COMMIT only — this resolves the broader FK collision when overlay tables reference soon-to-be-rebuilt source rows; (b) `style_prompts` is now a pure UPSERT on the PK (`ON CONFLICT(prompt_version) DO UPDATE ...`) rather than `INSERT OR REPLACE`, so a body edit updates the row in place without DELETE+INSERT. Regression test: `api/tests/test_importer.py::test_reimport_after_prompt_body_change_succeeds`.
+
+- **GSV coverage SQL doesn't pick up overlay-driven red-letter membership.** `GET /api/v1/gsv/coverage` reports `total_red_letter_sentences=3 / ch5_total=0` while `GET /api/v1/sentences?chapter=5` correctly reports 68 red-letter in Mt 5. The coverage endpoint (`api/gsv/service.py`) computes counts directly from `red_letter_source_ranges` instead of going through the canonical effective-set CTE introduced in slice 7. Fix: route the coverage count through `effective_red_letter_set(conn, chapter)` (or its repository-wide equivalent) so it honors `red_letter_overlays.rejected=1` and manual-origin overlay heads. Affects only the GSV coverage display; ranking, parallel reader, and chapter summaries all use the correct CTE already.
 
 ## Future work (out of scope for v1)
 

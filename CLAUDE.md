@@ -34,6 +34,11 @@ The primary user is Gavin (one user, one device for now — no multi-tenancy).
 5. **Compile the Gavin Standard Version (GSV).**
    The GSV for Matthew is the per-sentence top-ranked translation, stitched into a continuous text. Exportable as plain text plus a structured form preserving which source won each sentence and why. The same export pipeline feeds a **static site** generated from the database.
 
+6. **Synthesize each chapter into a culturally-grounded summary**, built on top of the per-sentence ranked candidates (JTBDs #3 and #4).
+   Where the per-sentence work answers *"what did Jesus say in this sentence and what was he doing with it,"* the chapter summary answers *"what is Jesus doing across this chapter as a whole — how does the speech move, who is the audience and how does that audience shift, what cultural and rhetorical threads run through it, what Hebrew Scripture is in the room, what's the pragmatic arc."* This is the analytical reader's *"what was the whole point of this chapter"* view — built from the cultural-grounding substrate (each sentence's structured JSON: English + underlying-language hypothesis + cultural notes + intertexts + audience + pragmatic act + confidence) rather than from a generic English-language commentary, so the summary stays anchored in the same first-century Jewish framing as the sentence-level work.
+
+   Output is structured (a similar JSON shape to the per-sentence output): *narrative arc*, *audience dynamics*, *cultural throughline*, *rhetorical strategy*, *key intertexts*, a plain-English chapter summary, and named uncertainty. Stored with full provenance (chapter, model + effort, prompt version, timestamp, list of candidate IDs the summary drew on) and reproducible. The summary is a candidate kind in its own right — the same lens that produced the sentence-level candidates, applied at the chapter level, and rankable / replaceable / regeneratable when Gavin's understanding of the per-sentence material shifts.
+
 ## Alignment
 
 The atomic unit is the **sentence** (as defined by the Greek). Every sentence has:
@@ -59,7 +64,7 @@ Translation candidates are produced by **Claude Code subagents running in a git 
 Implications:
 - **No `ANTHROPIC_API_KEY` plumbing.** Credentials live in Claude Code, not in this repo. Anything in `SPEC.md` / `PLAN.md` / code that assumes `ANTHROPIC_API_KEY` or the `anthropic` Python SDK is the artifact of an earlier (now-superseded) plan and should be reworked.
 - **No per-token dollar cost.** Usage is bounded by Gavin's existing Claude Code subscription / rate limits, not a USD-per-token meter. Cost-cap settings (`MAX_RUN_COST_USD`, `MAX_DAILY_COST_USD`) become "max worktrees per run", "max worktrees per day", or simply "max wall-clock minutes per run". Pick a unit that maps to actual subscription limits, not a billing fiction.
-- **Model provenance** is the Claude Code agent identity at generation time (e.g., `claude-opus-4-7`), captured per candidate from the worktree's reported model string.
+- **Model provenance** is the Claude Code agent identity at generation time, captured per candidate as the composite `"{model}+{effort}"` string (e.g., `claude-opus-4-7+xhigh`). The runner pins `--model` and `--effort` on every spawn so the provenance is deterministic per generation rather than inheriting whatever the user's interactive session selected. The CLI's own version (e.g. `claude-code-2.1.126`) is captured separately on the worktree-result diagnostic field but is not the canonical identity.
 - **Concurrency** is bounded by what Claude Code can run safely in parallel on this machine (worktrees + processes), not API connection-pool size.
 - **Worktree hygiene**: each generation runs in an isolated branch or worktree so concurrent runs don't trample each other; the runner cleans up worktrees after capturing output.
 
@@ -76,3 +81,21 @@ Implications:
 - UI shape for the ranking workflow and the red-letter-range editor — hardest UX, worth prototyping early.
 - ~~Where exactly to source each Berean text (BSB / BLB / BIB) — the official `bereanbible.com` distributions vs. mirrors. Pin specific versions/checksums in fixtures.~~ Resolved in slice 2 — pinned to `bereanbible.com/bsb.txt`, `literalbible.com/blb.txt`, and `bereanbible.com/bsb_tables.tsv` (the BIB interlinear ships as part of the BSB Translation Tables TSV); see `fixtures/manifest.json` for SHA-256s.
 - Sentence segmentation source per Greek edition — SBLGNT punctuation works directly; Byzantine needs a chosen segmenter (deferred to v2 — Byzantine is verse-keyed only in v1, see `TODO.md`).
+- ~~**Model identity capture from the Claude Code subagent.**~~ Resolved — the runner now pins `claude -p --model <id> --effort <level>` on every spawn (defaults `claude-opus-4-7` + `xhigh`, configurable via `CLAUDE_MODEL` / `CLAUDE_EFFORT`). The candidate's canonical `model` field is the composite `"{model}+{effort}"` (e.g. `claude-opus-4-7+xhigh`). The `claude --version` reading is still captured on `WorktreeResult.cli_version` for diagnostics but is not the provenance string. Per-candidate UI should display the composite as the model identity.
+
+### Execute the path, don't read it (security claims especially)
+
+**Never report a vulnerability, data leak, or "X can reach Y" as fact on
+the strength of reading code. Execute it — issue the credential, send the
+request, read the response — and quote the output.** Say "unverified"
+until you have.
+
+The failure mode this stops: verifying the two ENDS of a path and
+inferring the middle. "This writes settings" + "that reads settings"
+does not mean data flows between them — there may be a filter,
+blocklist, allowlist, or unreachable branch in between. Applies equally
+to claims in specs, claims reported to the user, and findings a reviewer
+subagent hands you (verify before repeating; say which claims you checked
+yourself). When a path genuinely can't be executed (production data,
+destructive side effects), label the claim reasoned-not-executed rather
+than presenting inference as fact.

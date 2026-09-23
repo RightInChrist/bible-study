@@ -23,11 +23,20 @@ from api.settings import get_settings
 
 def main() -> int:
     settings = get_settings()
+    # Exclude data/ from the reload watcher (worktrees live there). The
+    # uvicorn reloader always appends Path.cwd() to its watched dirs,
+    # so we can't keep data/ out by listing other dirs in reload_dirs;
+    # we must pass the directory explicitly via reload_excludes (which
+    # treats values that are existing directories as exclude_dirs).
+    project_root = settings.project_root
+    data_dir = project_root / "data"
+    data_dir.mkdir(exist_ok=True)
     uvicorn.run(
         "api.main:app",
         host=settings.bind_host,
         port=settings.bind_port,
         reload=True,
+        reload_excludes=[str(data_dir)],
     )
     return 0
 

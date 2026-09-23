@@ -31,7 +31,26 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from api.claude.schemas import SourceSetId, StylePrompt
+from api.claude.schemas import RunScopeKind, SourceSetId, StylePrompt
+
+
+_VALID_RUN_SCOPE_KINDS: frozenset[str] = frozenset(
+    {
+        "one_sentence",
+        "verse_range",
+        "whole_chapter",
+        "all_unranked_red_letter",
+        "chapter_summary",
+    }
+)
+
+
+_DEFAULT_PER_SENTENCE_SCOPES: tuple[RunScopeKind, ...] = (
+    "one_sentence",
+    "verse_range",
+    "whole_chapter",
+    "all_unranked_red_letter",
+)
 
 
 _FRONT_MATTER_FENCE = "---"
@@ -129,11 +148,23 @@ def _validate_source_sets(values: list[str]) -> list[SourceSetId]:
     return list(values)  # type: ignore[return-value]
 
 
+def _validate_run_scopes(values: list[str]) -> list[RunScopeKind]:
+    for v in values:
+        if v not in _VALID_RUN_SCOPE_KINDS:
+            raise ValueError(f"unknown run scope kind in compatible_run_scopes: {v!r}")
+    return list(values)  # type: ignore[return-value]
+
+
 def load_prompt(path: Path) -> StylePrompt:
     """Read a prompt file from disk and return the parsed ``StylePrompt``.
 
     Raises ``ValueError`` on malformed front-matter or unknown
     ``compatible_source_sets`` entries.
+
+    The optional ``output_format`` front-matter scalar drives whether the
+    worktree runner JSON-parses the agent's stdout (``json``) or stores
+    it as plain text (``text``). Default is ``text`` if omitted — the
+    three pre-existing simple-style prompts all return plain English.
     """
     text = path.read_text(encoding="utf-8")
     front, body = _split_front_matter(text)
@@ -143,6 +174,10 @@ def load_prompt(path: Path) -> StylePrompt:
     description = parsed.get("description")
     requires_greek = parsed.get("requires_greek")
     compatible = parsed.get("compatible_source_sets") or []
+    output_format_raw = parsed.get("output_format", "text")
+    wants_context_window = parsed.get("wants_context_window", False)
+    wants_chapter_input = parsed.get("wants_chapter_input", False)
+    compatible_scopes_raw = parsed.get("compatible_run_scopes")
     if not isinstance(name, str) or not isinstance(version, str):
         raise ValueError("style prompt front-matter requires 'name' and 'version' (strings)")
     if not isinstance(description, str):
@@ -153,7 +188,51 @@ def load_prompt(path: Path) -> StylePrompt:
         raise ValueError(
             "style prompt front-matter requires 'compatible_source_sets' (list of strings)"
         )
+    if output_format_raw not in ("text", "json"):
+        raise ValueError(
+            f"style prompt 'output_format' must be 'text' or 'json' (got {output_format_raw!r})"
+        )
+    if not isinstance(wants_context_window, bool):
+        raise ValueError(
+            "style prompt 'wants_context_window' must be a bool (got "
+            f"{wants_context_window!r})"
+        )
+    if not isinstance(wants_chapter_input, bool):
+        raise ValueError(
+            "style prompt 'wants_chapter_input' must be a bool (got "
+            f"{wants_chapter_input!r})"
+        )
+    if wants_chapter_input and wants_context_window:
+        raise ValueError(
+            "style prompt cannot set both 'wants_chapter_input' and "
+            "'wants_context_window' — chapter input replaces the per-sentence bundle"
+        )
     source_sets = _validate_source_sets(compatible)
+    if compatible_scopes_raw is None:
+        # Default: chapter prompts get [chapter_summary]; per-sentence
+        # prompts get the four per-sentence scope kinds. Encoded as the
+        # default factory on the model, but we want the parsed prompt's
+        # compatible_run_scopes to reflect the on-disk fixture's choice
+        # explicitly when present.
+        compatible_scopes: list[RunScopeKind] = (
+            ["chapter_summary"]
+            if wants_chapter_input
+            else list(_DEFAULT_PER_SENTENCE_SCOPES)
+        )
+    else:
+        if not isinstance(compatible_scopes_raw, list) or not all(
+            isinstance(v, str) for v in compatible_scopes_raw
+        ):
+            raise ValueError(
+                "style prompt 'compatible_run_scopes' must be a list of strings"
+            )
+        compatible_scopes = _validate_run_scopes(compatible_scopes_raw)
+    if wants_chapter_input and source_sets:
+        raise ValueError(
+            "style prompt with 'wants_chapter_input: true' must not "
+            "declare 'compatible_source_sets' — its source set is always "
+            "the synthetic 'CHAPTER_BUNDLE' literal"
+        )
     return StylePrompt(
         name=name,
         version=version,
@@ -161,6 +240,10 @@ def load_prompt(path: Path) -> StylePrompt:
         requires_greek=requires_greek,
         compatible_source_sets=source_sets,
         body=body,
+        output_format=output_format_raw,  # type: ignore[arg-type]
+        wants_context_window=wants_context_window,
+        wants_chapter_input=wants_chapter_input,
+        compatible_run_scopes=compatible_scopes,
     )
 
 

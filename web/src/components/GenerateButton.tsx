@@ -3,9 +3,13 @@
  *
  * The full Generate page (batch form, recent-runs list, SSE-driven progress)
  * lands in slice 3b. This slice ships the smallest path: a button on the
- * sentence detail surface that POSTs `{scope: one_sentence, ...}` with a
- * sensible default (literal-v1 + BOTH_GREEK + claude-sonnet-4-6) and
- * polls the run until it completes, then refetches the candidates list.
+ * sentence detail surface that POSTs `{scope: one_sentence, ...}` with the
+ * primary lens default (`first-century-jewish-v1` × `BOTH_GREEK` ×
+ * `claude-opus-4-7`) and polls the run until it completes, then refetches
+ * the candidates list.
+ *
+ * The style-prompt picker is surfaced as a small dropdown so cross-checks
+ * (literal/dynamic/plainspoken) remain one click away.
  *
  * Wrapped in `<AuthOnly>` so the static-site export strips it out at
  * build time (Hard decision #14).
@@ -15,18 +19,36 @@ import { useState } from "react";
 import { useCreateRun, useRun } from "../api/hooks";
 import { ApiError } from "../api/client";
 import { AuthOnly } from "./AuthOnly";
-import type { CreateRunRequest } from "../api/types";
+import type {
+  CreateRunRequest,
+  StylePromptVersion,
+} from "../api/types";
 
 interface Props {
   sentenceId: string;
   onCompleted?: () => void;
 }
 
-const DEFAULT_REQUEST = (sentenceId: string): CreateRunRequest => ({
+const DEFAULT_STYLE: StylePromptVersion = "first-century-jewish-v1";
+const DEFAULT_MODEL = "claude-opus-4-7";
+const DEFAULT_EFFORT = "xhigh";
+
+const STYLE_OPTIONS: ReadonlyArray<{ value: StylePromptVersion; label: string }> = [
+  { value: "first-century-jewish-v1", label: "First-century Jewish (primary)" },
+  { value: "literal-v1", label: "Literal" },
+  { value: "dynamic-v1", label: "Dynamic equivalence" },
+  { value: "plainspoken-v1", label: "Plainspoken modern" },
+];
+
+const buildRequest = (
+  sentenceId: string,
+  stylePromptVersion: StylePromptVersion,
+): CreateRunRequest => ({
   scope: { kind: "one_sentence", sentence_id: sentenceId },
-  style_prompt_version: "literal-v1",
+  style_prompt_version: stylePromptVersion,
   source_set_id: "BOTH_GREEK",
-  model: "claude-sonnet-4-6",
+  model: DEFAULT_MODEL,
+  effort: DEFAULT_EFFORT,
 });
 
 export function GenerateButton({ sentenceId, onCompleted }: Props) {
@@ -39,6 +61,8 @@ export function GenerateButton({ sentenceId, onCompleted }: Props) {
 
 function GenerateButtonInner({ sentenceId, onCompleted }: Props) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [stylePromptVersion, setStylePromptVersion] =
+    useState<StylePromptVersion>(DEFAULT_STYLE);
   const createRun = useCreateRun();
   const runQuery = useRun(activeRunId);
 
@@ -48,14 +72,13 @@ function GenerateButtonInner({ sentenceId, onCompleted }: Props) {
     !["completed", "failed", "cancelled", "interrupted"].includes(runQuery.data.status);
 
   const submit = (): void => {
-    createRun.mutate(DEFAULT_REQUEST(sentenceId), {
+    createRun.mutate(buildRequest(sentenceId, stylePromptVersion), {
       onSuccess: (run) => {
         setActiveRunId(run.run_id);
       },
     });
   };
 
-  // Auto-clear the active run when terminal so the next click starts fresh.
   if (
     activeRunId !== null &&
     runQuery.data !== undefined &&
@@ -68,6 +91,21 @@ function GenerateButtonInner({ sentenceId, onCompleted }: Props) {
 
   return (
     <div className="generate-button" data-testid="generate-button">
+      <select
+        aria-label="Style prompt"
+        data-testid="generate-button__style"
+        value={stylePromptVersion}
+        onChange={(e) =>
+          setStylePromptVersion(e.target.value as StylePromptVersion)
+        }
+        disabled={createRun.isPending || isRunning}
+      >
+        {STYLE_OPTIONS.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
       <button
         type="button"
         onClick={submit}
@@ -78,7 +116,7 @@ function GenerateButtonInner({ sentenceId, onCompleted }: Props) {
           ? "Submitting…"
           : isRunning
             ? `Generating (${runQuery.data?.items_completed ?? 0}/${runQuery.data?.items_count ?? 1})`
-            : "Generate translation (literal-v1 · Both Greek)"}
+            : `Generate translation (${stylePromptVersion} · Both Greek)`}
       </button>
       {createError ? (
         <div className="generate-button__error" role="alert">

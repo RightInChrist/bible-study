@@ -71,7 +71,7 @@ def _read_replay_items(run_id: str) -> list[RunItemSnapshot]:
     try:
         rows = conn.execute(
             """
-            SELECT run_id, ordinal, sentence_id, status, candidate_id,
+            SELECT run_id, ordinal, sentence_id, chapter, status, candidate_id,
                    error_code, error_message, started_at, completed_at
             FROM generation_run_items
             WHERE run_id=? AND status NOT IN ('pending', 'running')
@@ -86,6 +86,7 @@ def _read_replay_items(run_id: str) -> list[RunItemSnapshot]:
             run_id=row["run_id"],
             ordinal=int(row["ordinal"]),
             sentence_id=row["sentence_id"],
+            chapter=int(row["chapter"]) if row["chapter"] is not None else None,
             status=row["status"],
             candidate_id=int(row["candidate_id"]) if row["candidate_id"] is not None else None,
             error_code=row["error_code"],
@@ -112,13 +113,19 @@ def _read_total_items(run_id: str) -> int:
 
 
 def _replay_item_event(item: RunItemSnapshot) -> dict[str, str]:
+    base: dict[str, object] = {
+        "run_id": item.run_id,
+        "ordinal": item.ordinal,
+    }
+    if item.sentence_id is not None:
+        base["sentence_id"] = item.sentence_id
+    if item.chapter is not None:
+        base["chapter"] = item.chapter
     if item.status == "completed":
         return _format_event(
             "item_completed",
             {
-                "run_id": item.run_id,
-                "ordinal": item.ordinal,
-                "sentence_id": item.sentence_id,
+                **base,
                 "candidate_id": item.candidate_id,
                 "completed_at": item.completed_at,
             },
@@ -127,41 +134,18 @@ def _replay_item_event(item: RunItemSnapshot) -> dict[str, str]:
         return _format_event(
             "item_failed",
             {
-                "run_id": item.run_id,
-                "ordinal": item.ordinal,
-                "sentence_id": item.sentence_id,
+                **base,
                 "error_code": item.error_code,
                 "error_message": item.error_message,
             },
         )
     if item.status == "cancelled":
-        return _format_event(
-            "item_cancelled",
-            {
-                "run_id": item.run_id,
-                "ordinal": item.ordinal,
-                "sentence_id": item.sentence_id,
-            },
-        )
+        return _format_event("item_cancelled", base)
     if item.status == "interrupted":
-        return _format_event(
-            "item_interrupted",
-            {
-                "run_id": item.run_id,
-                "ordinal": item.ordinal,
-                "sentence_id": item.sentence_id,
-            },
-        )
+        return _format_event("item_interrupted", base)
     # ``running`` should only appear momentarily in the DB; replay treats
     # it the same as ``pending`` and excludes it. Defensive fallback:
-    return _format_event(
-        "item_running",
-        {
-            "run_id": item.run_id,
-            "ordinal": item.ordinal,
-            "sentence_id": item.sentence_id,
-        },
-    )
+    return _format_event("item_running", base)
 
 
 async def stream_run(run_id: str) -> EventSourceResponse:

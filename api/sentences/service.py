@@ -3,20 +3,24 @@
 Architect §Components: routes are thin adapters over service functions.
 The static-site builder calls these directly (Hard decision #6).
 
-Designer Flow 1 step 4 needs a per-sentence ``is_red_letter`` signal so the
-left-edge red rule renders without the UI loading the full red-letter set.
-v1 slice has no overlays — this query handles only the source-ranges-only
-path. The next slice that authors overlays MUST swap to PLAN's canonical
-effective-set CTE (PLAN.md §Effective red-letter set query, around line 632)
-which uses an ``overlay_heads`` CTE to compute chain-leaf semantics, gates
-on the ``rejected=1`` column rather than ``operation='reject'``, and unions
-in manual-origin overlay heads with no ``source_range_id``.
+Slice 7 — switched ``_red_letter_sentence_ids`` to PLAN's canonical
+effective-set CTE (PLAN.md §Effective red-letter set query, ~line 632).
+The CTE materialises chain heads, gates source-anchored chains on
+``rejected=1`` from the head, and UNION ALLs manual-origin chain heads.
+The legacy slice-3c stub that walked ``red_letter_source_ranges`` only
+is gone. The function is now a thin re-export of
+:func:`api.red_letter.service.effective_red_letter_set` so there is one
+canonical implementation.
 """
 from __future__ import annotations
 
 import sqlite3
 
 from api.errors import SentenceNotFoundError
+from api.red_letter.service import (
+    effective_red_letter_provenance,
+    effective_red_letter_set,
+)
 from api.sentences.schemas import (
     BibInterlinearWord,
     ByzantineVerse,
@@ -93,7 +97,9 @@ def get_sentence_parallel(
 
     bib = _fetch_bib_for_range(conn, start_chapter, start_verse, end_chapter, end_verse)
 
-    red_letter_ids = _red_letter_sentence_ids(conn)
+    provenance_map = effective_red_letter_provenance(conn)
+    sid = sentence["sentence_id"]
+    red_letter_provenance = provenance_map.get(sid)
     return SentenceParallelResponse(
         sentence_id=sentence["sentence_id"],
         chapter=sentence["chapter"],
@@ -109,7 +115,8 @@ def get_sentence_parallel(
         byzantine=byzantine,
         english=english_columns,
         bib_interlinear=bib,
-        is_red_letter=sentence["sentence_id"] in red_letter_ids,
+        is_red_letter=red_letter_provenance is not None,
+        red_letter_provenance=red_letter_provenance,
     )
 
 
@@ -137,36 +144,12 @@ def _current_fixture_version(conn: sqlite3.Connection) -> str | None:
 def _red_letter_sentence_ids(conn: sqlite3.Connection) -> set[str]:
     """Return the set of sentence_ids in the **effective** red-letter set.
 
-    v1 slice has no overlays — this implementation walks
-    ``red_letter_source_ranges`` only, with a defensive ``operation='reject'``
-    NOT EXISTS clause that is trivially satisfied while the overlay table is
-    empty. The next slice that authors overlays MUST replace this with PLAN's
-    canonical effective-set CTE (PLAN.md §Effective red-letter set query, ~line
-    632): an ``overlay_heads`` CTE for chain-leaf semantics, the ``rejected=1``
-    column rather than the ``operation='reject'`` shape, and a UNION ALL for
-    manual-origin overlay heads with no ``source_range_id``.
+    Slice 7: thin re-export of :func:`api.red_letter.service.effective_red_letter_set`
+    so there is one canonical implementation of PLAN's effective-set CTE.
+    Existing callers (the static-site builder, the GSV coverage query, the
+    rank-queue "is red-letter" filter) keep working without rewiring.
     """
-    rows = conn.execute(
-        """
-        SELECT rls.start_sentence_id AS start_sid,
-               rls.end_sentence_id AS end_sid
-        FROM red_letter_source_ranges AS rls
-        WHERE NOT EXISTS (
-            SELECT 1 FROM red_letter_overlays AS rlo
-            WHERE rlo.source_range_id = rls.source_range_id
-              AND rlo.operation = 'reject'
-        )
-        """
-    ).fetchall()
-    if not rows:
-        return set()
-
-    sentence_ids: set[str] = set()
-    for row in rows:
-        start_sid = row["start_sid"]
-        end_sid = row["end_sid"]
-        sentence_ids.update(_sentence_ids_between(conn, start_sid, end_sid))
-    return sentence_ids
+    return effective_red_letter_set(conn)
 
 
 def _sentence_ids_between(

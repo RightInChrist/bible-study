@@ -1,12 +1,14 @@
-"""Claude generation backend (Slice 3a).
+"""Claude generation backend (Slice 3a-redo).
 
 Modules:
     - ``prompts`` — load + parse versioned style-prompt fixtures.
     - ``sources`` — source-set resolver + canonical snapshot hashing.
-    - ``client`` — Anthropic SDK wrapper with cost estimation + typed errors.
+    - ``worktree`` — Claude Code subagent worktree spawner + typed errors.
     - ``schemas`` — Pydantic models for prompts and source bundles.
 
 The runner / SSE / API routes live under ``api.runs``; this package owns
-everything that talks to Anthropic or to the prompt and source-bundle
-fixtures.
+everything that prepares context for Claude Code or hashes source
+bundles. There is no Anthropic SDK dependency here — generation is a
+subprocess invocation of the ``claude`` CLI per CLAUDE.md §Generation
+mechanism.
 """

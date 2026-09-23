@@ -34,6 +34,7 @@ _EXPECTED_TABLES = frozenset(
         "tie_break_decisions",
         "generation_runs",
         "generation_run_items",
+        "chapter_summaries",
     }
 )
 
