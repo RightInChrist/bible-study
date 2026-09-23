@@ -375,16 +375,38 @@ def import_fixtures(
     conn = open_connection(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
+        # Defer FK checks until COMMIT. Without this the
+        # ``DELETE FROM sentences`` step fails immediately if any overlay
+        # row (claude_candidates, rankings, red_letter_overlays) currently
+        # references a sentence — even though we re-INSERT the same
+        # sentence_ids in the same transaction. Deferring lets the txn
+        # reach a self-consistent state before SQLite checks; orphans (a
+        # referenced sentence that the new fixtures *don't* re-INSERT)
+        # surface at COMMIT, which is what the orphan pre-flight is for.
+        # Reset to default at end of txn.
+        conn.execute("PRAGMA defer_foreign_keys = ON")
         try:
             # Truncate fixture-derived tables in child-first order; overlay
             # tables are NOT touched (Hard decision #7).
             #
-            # ``style_prompts`` is fixture-derived (the body lives on disk
-            # under ``fixtures/prompts/*.md``; the table is metadata). We
-            # only DELETE rows whose ``prompt_version`` is not referenced
-            # by any ``claude_candidates`` row — referenced prompts are
-            # left in place so a candidate FK never dangles. The new
-            # bodies and SHA-256s are then upserted on top.
+            # ``style_prompts`` is the **only** source-derived table that
+            # uses UPSERT-on-PK rather than TRUNCATE+INSERT. The Data
+            # rationale for TRUNCATE+INSERT (re-segmentation can change
+            # which PKs exist; UPSERT-on-PK would leave stale rows) does
+            # not apply to prompts — the PK ``prompt_version`` is the
+            # contract, the body and SHA-256 evolve. A DELETE+INSERT path
+            # (or ``INSERT OR REPLACE``, which does DELETE+INSERT under the
+            # hood) fails with ``FOREIGN KEY constraint failed`` whenever
+            # any ``claude_candidates`` row references the prompt — that's
+            # the bug logged in TODO.md and reproduced by
+            # ``test_reimport_after_prompt_body_change_succeeds``. Pure
+            # UPSERT updates the row in place so the FK never dangles.
+            #
+            # Stale prompt rows whose version is missing from the new
+            # manifest AND not referenced by any candidate are deleted so
+            # an honest re-import doesn't accumulate dead metadata. Rows
+            # still referenced by a candidate are preserved untouched
+            # (they reflect the body the candidate was generated against).
             for table in (
                 "words",
                 "red_letter_source_ranges",
@@ -394,13 +416,17 @@ def import_fixtures(
                 "sentences",
             ):
                 conn.execute(f"DELETE FROM {table}")
+            new_versions = {row[0] for row in prompt_rows}
+            placeholders = ",".join(["?"] * len(new_versions)) if new_versions else "''"
             conn.execute(
-                """
+                f"""
                 DELETE FROM style_prompts
-                WHERE prompt_version NOT IN (
+                WHERE prompt_version NOT IN ({placeholders})
+                  AND prompt_version NOT IN (
                     SELECT DISTINCT style_prompt_version FROM claude_candidates
-                )
-                """
+                  )
+                """,
+                tuple(new_versions),
             )
 
             _execute_many(
@@ -461,17 +487,25 @@ def import_fixtures(
                 """,
                 red_letter_rows,
             )
-            # Style prompts: ``INSERT OR REPLACE`` on the PK so a re-import
-            # of the same manifest is a byte-identical no-op (preserves
-            # the idempotency invariant), and a manifest update with a
-            # new body SHA refreshes the row in place.
+            # Style prompts: pure UPSERT-on-PK. Updates the row in place
+            # so an FK from ``claude_candidates.style_prompt_version``
+            # never dangles — that's the load-bearing difference from
+            # ``INSERT OR REPLACE``, which DELETE+INSERTs and trips the FK.
             for prompt_row in prompt_rows:
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO style_prompts (
+                    INSERT INTO style_prompts (
                         prompt_version, name, description, requires_greek,
                         compatible_source_sets, body_path, body_sha256, imported_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(prompt_version) DO UPDATE SET
+                        name = excluded.name,
+                        description = excluded.description,
+                        requires_greek = excluded.requires_greek,
+                        compatible_source_sets = excluded.compatible_source_sets,
+                        body_path = excluded.body_path,
+                        body_sha256 = excluded.body_sha256,
+                        imported_at = excluded.imported_at
                     """,
                     prompt_row,
                 )

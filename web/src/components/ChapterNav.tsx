@@ -48,6 +48,22 @@ export function ChapterNav({ chapter }: Props) {
           {n}
         </Link>
       ))}
+      <Link
+        to={`/gsv/${chapter}`}
+        className="chapter-nav__btn chapter-nav__gsv"
+        aria-label={`GSV view for Matthew ${chapter}`}
+        data-testid="chapter-nav__gsv-link"
+      >
+        GSV →
+      </Link>
+      <Link
+        to={`/chapter/${chapter}/summary`}
+        className="chapter-nav__btn chapter-nav__summary"
+        aria-label={`Chapter summary for Matthew ${chapter}`}
+        data-testid="chapter-nav__summary-link"
+      >
+        Summary →
+      </Link>
     </nav>
   );
 }

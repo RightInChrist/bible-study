@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.red_letter.schemas import RedLetterProvenance
+
 
 TranslationName = Literal["BSB", "BLB", "WEB"]
 
@@ -31,7 +33,7 @@ class SentenceListItem(BaseModel):
     )
 
 
-class SentenceListResponse(BaseModel):
+class SentenceListResponse(BaseModel):  # noqa: D101 — sibling response shape
     model_config = ConfigDict(extra="forbid")
 
     chapter: int
@@ -107,4 +109,10 @@ class SentenceParallelResponse(BaseModel):
         description="True iff the sentence intersects the effective red-letter set "
         "(red_letter_source_ranges minus rejecting overlays). Drives Designer Flow 1 "
         "step 4's left-edge red rule."
+    )
+    red_letter_provenance: RedLetterProvenance | None = Field(
+        default=None,
+        description="When ``is_red_letter`` is True, identifies the chain head / "
+        "source range that flagged the sentence so the unmark UI knows what to "
+        "target. Omitted when the sentence is not in the effective set.",
     )

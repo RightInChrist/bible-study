@@ -275,6 +275,131 @@ def test_partial_import_rolls_back(
     assert getattr(record, "error_code", None) is not None
 
 
+def test_reimport_after_prompt_body_change_succeeds(
+    project_root: Path, migrated_db: Path
+) -> None:
+    """The FK importer bug logged in TODO.md: a prompt body change updates
+    the manifest hash, marks the pill stale, and historically blew up the
+    next import with ``FOREIGN KEY constraint failed`` because authored
+    candidates referenced ``style_prompts`` rows that ``INSERT OR REPLACE``
+    DELETE+INSERTed.
+
+    This test seeds a candidate referencing a prompt, edits the prompt's
+    body + manifest hash, and re-runs the importer. The fix is the pure
+    UPSERT-on-PK in ``api/importer/runner.py``: the row is updated in
+    place so the FK never dangles.
+    """
+    import hashlib
+
+    # 1. Initial honest import.
+    import_fixtures(project_root=project_root, db_path=migrated_db)
+
+    # 2. Seed a snapshot + candidate referencing literal-v1 (a prompt that
+    #    ships in the fixtures and is in the manifest).
+    sentence_row = sqlite3.connect(migrated_db).execute(
+        "SELECT sentence_id FROM sentences ORDER BY chapter, ordinal_in_chapter LIMIT 1"
+    ).fetchone()
+    sid = sentence_row[0]
+    conn = sqlite3.connect(migrated_db)
+    try:
+        conn.execute(
+            """
+            INSERT INTO source_snapshots (
+                snapshot_hash, sentence_id, source_set_id, fixture_version,
+                prompt_version, payload_json, byte_size,
+                source_snapshot_canon_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "snap-prompt-body-change-test",
+                sid,
+                "SBLGNT_ONLY",
+                "fix-test",
+                "literal-v1",
+                "{}",
+                2,
+                "v1",
+                "2026-05-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO claude_candidates (
+                candidate_id, sentence_id, style_prompt_version, source_set_id,
+                model, generated_at, candidate_text, source_snapshot_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                9999,
+                sid,
+                "literal-v1",
+                "SBLGNT_ONLY",
+                "test+model",
+                "2026-05-01T00:00:00Z",
+                "test candidate text",
+                "snap-prompt-body-change-test",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 3. Edit the literal-v1 prompt body + update the manifest hash so
+    #    the importer's hash check passes against the new body.
+    prompt_path = project_root / "fixtures" / "prompts" / "literal-v1.md"
+    original = prompt_path.read_text(encoding="utf-8")
+    new_body_full = original + "\n\n<!-- body change for FK regression test -->\n"
+    prompt_path.write_text(new_body_full, encoding="utf-8")
+    new_hash = hashlib.sha256(new_body_full.encode("utf-8")).hexdigest()
+    # The DB column ``style_prompts.body_sha256`` hashes the body
+    # **post-front-matter** (api.claude.prompts.body_sha256), not the
+    # whole file, so capture the body slice for that comparison.
+    from api.claude.prompts import _split_front_matter, body_sha256 as _body_sha256
+    _front, body_only = _split_front_matter(new_body_full)
+    new_body_only_hash = _body_sha256(body_only)
+
+    manifest_path = project_root / "fixtures" / "manifest.json"
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for prompt in manifest_payload["prompts"]:
+        if prompt["version"] == "literal-v1":
+            prompt["sha256"] = new_hash
+            break
+    else:
+        raise AssertionError("literal-v1 not in manifest.prompts")
+    manifest_path.write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    # 4. Re-import — this is the call that historically failed with
+    #    ``FOREIGN KEY constraint failed``. With the UPSERT fix, it
+    #    succeeds, the prompt's body_sha256 matches the new file hash,
+    #    and the candidate row is untouched.
+    import_fixtures(project_root=project_root, db_path=migrated_db)
+
+    conn = sqlite3.connect(migrated_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        prompt_row = conn.execute(
+            "SELECT body_sha256 FROM style_prompts WHERE prompt_version = ?",
+            ("literal-v1",),
+        ).fetchone()
+        assert prompt_row is not None
+        assert prompt_row["body_sha256"] == new_body_only_hash, (
+            "style_prompts.body_sha256 should reflect the new body bytes "
+            "after the UPSERT"
+        )
+        cand_row = conn.execute(
+            "SELECT candidate_text, style_prompt_version FROM claude_candidates "
+            "WHERE candidate_id = 9999"
+        ).fetchone()
+        assert cand_row is not None, "candidate must survive the re-import"
+        assert cand_row["candidate_text"] == "test candidate text"
+        assert cand_row["style_prompt_version"] == "literal-v1"
+    finally:
+        conn.close()
+
+
 def test_full_matthew_imports_28_chapters(
     project_root: Path, migrated_db: Path
 ) -> None:

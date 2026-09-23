@@ -1,51 +1,50 @@
-"""``BIBLE_STUDY_FAKE_CLAUDE`` env gating.
+"""Worktree-spawner dependency wiring.
 
-Eval-harness toggle (``settings.bible_study_fake_claude``) is honored
-ONLY in ``env=development`` — the same gate as ``EXTRA_ALLOWED_HOSTS``
-and ``EXTRA_ALLOWED_ORIGINS``. Without this gate, a public-facing
-deployment could be made to bypass the real Anthropic integration with
-a single env var.
+Slice 3a-redo replaced the SDK-era ``BIBLE_STUDY_FAKE_CLAUDE`` env-var
+fake with explicit dependency injection: tests pass a fake spawner via
+``app.dependency_overrides[get_worktree_spawner]``; production always
+gets the real :class:`ClaudeCodeWorktreeSpawner`. There is no env-var
+toggle anymore — the previous toggle was a security wart (a public
+deployment could disable real generation with a single env flip; the
+twin-override pattern's env-gate was the band-aid).
+
+These tests guard the new contract: the default-resolved spawner is
+always the production spawner, and tests inject the fake explicitly.
 """
 from __future__ import annotations
 
 import pytest
 
-from api.runs.routes import (
-    _PROCESS_CLAUDE_CLIENT,  # type: ignore[attr-defined]
-    get_claude_client,
-)
+from api.runs.routes import get_worktree_spawner
 from api.settings import reset_settings_cache
 
 
 @pytest.fixture(autouse=True)
-def _reset_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear the cached process-wide Claude client between tests."""
+def _reset_module_state() -> None:
+    """Clear the cached process-wide spawner between tests."""
     import api.runs.routes as routes_mod
 
-    routes_mod._PROCESS_CLAUDE_CLIENT = None
+    routes_mod._PROCESS_WORKTREE_SPAWNER = None
     reset_settings_cache()
     yield
-    routes_mod._PROCESS_CLAUDE_CLIENT = None
+    routes_mod._PROCESS_WORKTREE_SPAWNER = None
     reset_settings_cache()
 
 
-def test_fake_claude_honored_in_development(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_spawner_is_real_claude_code_worktree_spawner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("ENV", "development")
     monkeypatch.setenv("BIND_HOST", "127.0.0.1")
-    monkeypatch.setenv("BIBLE_STUDY_FAKE_CLAUDE", "1")
     reset_settings_cache()
-    client = get_claude_client()
-    assert client.api_key_set is True
-    # Class name reveals it's the fake (built inside _build_eval_fake_claude_client).
-    assert type(client).__name__ != "AnthropicClaudeClient"
+    spawner = get_worktree_spawner()
+    assert type(spawner).__name__ == "ClaudeCodeWorktreeSpawner"
 
 
-def test_fake_claude_ignored_in_staging(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ENV", "staging")
+def test_spawner_is_singleton_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENV", "development")
     monkeypatch.setenv("BIND_HOST", "127.0.0.1")
-    monkeypatch.setenv("BIND_HOST_ALLOW_NON_LOCAL", "1")
-    monkeypatch.setenv("BIBLE_STUDY_FAKE_CLAUDE", "1")
     reset_settings_cache()
-    client = get_claude_client()
-    # Real client when env != development, even though the flag is set.
-    assert type(client).__name__ == "AnthropicClaudeClient"
+    a = get_worktree_spawner()
+    b = get_worktree_spawner()
+    assert a is b

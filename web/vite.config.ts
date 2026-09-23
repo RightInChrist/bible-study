@@ -30,10 +30,18 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       strictPort: true,
+      host: env.VITE_HOST ?? "127.0.0.1",
+      allowedHosts: env.VITE_ALLOWED_HOSTS
+        ? env.VITE_ALLOWED_HOSTS.split(",").map((h) => h.trim()).filter(Boolean)
+        : undefined,
       proxy: {
         "/api": {
           target: apiProxyTarget,
-          changeOrigin: false,
+          // `true` rewrites the upstream Host header to the proxy target
+          // (`127.0.0.1:<api-port>`), which keeps the API's loopback
+          // Host-header allowlist clean even when the browser is hitting
+          // the dev server from a non-loopback IP (LAN / Tailscale).
+          changeOrigin: true,
         },
       },
     },

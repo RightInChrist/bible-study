@@ -10,7 +10,18 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.claude.schemas import GenerationErrorCode, SourceSetId
+from api.claude.schemas import (
+    ChapterSourceSetId,
+    GenerationErrorCode,
+    SourceSetId,
+)
+
+
+# Slice 8: the request-level source_set_id literal accepts either the
+# per-sentence enum or the synthetic chapter-bundle value. The runner
+# routes by ``scope.kind`` — chapter scopes require ``CHAPTER_BUNDLE``;
+# per-sentence scopes require one of the seven per-sentence values.
+RequestSourceSetId = SourceSetId | ChapterSourceSetId
 
 
 RunStatus = Literal[
@@ -50,12 +61,27 @@ class AllUnrankedRedLetterScope(BaseModel):
     as_of: str | None = None
 
 
+class ChapterSummaryScope(BaseModel):
+    """Slice 8 — synthesise one chapter into a chapter-summary candidate.
+
+    ``items_count`` is always 1 for this scope: one synthesis call,
+    bundled with narrative_text + every red-letter sentence's saved
+    candidates. Counts as 1 worktree against ``MAX_WORKTREES_PER_RUN`` /
+    ``MAX_RUNS_PER_DAY`` caps.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["chapter_summary"] = "chapter_summary"
+    chapter: int = Field(ge=1, le=28)
+
+
 RunScope = Annotated[
     Union[
         OneSentenceScope,
         VerseRangeScope,
         WholeChapterScope,
         AllUnrankedRedLetterScope,
+        ChapterSummaryScope,
     ],
     Field(discriminator="kind"),
 ]
@@ -68,9 +94,25 @@ class CreateRunRequest(BaseModel):
 
     scope: RunScope
     style_prompt_version: str
-    source_set_id: SourceSetId
+    source_set_id: RequestSourceSetId
     model: str = Field(
-        description="Claude model identifier, e.g. 'claude-sonnet-4-6'.",
+        default="claude-opus-4-7",
+        min_length=1,
+        description=(
+            "Claude model identifier passed as ``claude --model <id>``. "
+            "Accepts an alias ('opus', 'sonnet') or a full name "
+            "('claude-opus-4-7'). Validated against the CLI's accepted "
+            "list lazily at spawn time — not at request time."
+        ),
+    )
+    effort: str = Field(
+        default="xhigh",
+        min_length=1,
+        description=(
+            "Reasoning-effort level passed as ``claude --effort <level>``. "
+            "CLI accepts: low, medium, high, xhigh, max. Higher effort "
+            "increases reasoning tokens and latency."
+        ),
     )
 
 
@@ -82,7 +124,7 @@ class RunResponse(BaseModel):
     run_id: str
     status: RunStatus
     style_prompt_version: str
-    source_set_id: SourceSetId
+    source_set_id: RequestSourceSetId
     model: str
     items_count: int = Field(description="Number of sentences in the run's resolved scope.")
     items_completed: int
@@ -91,11 +133,22 @@ class RunResponse(BaseModel):
     items_running: int
     items_cancelled: int
     items_interrupted: int
-    estimated_cost_usd: float
-    estimated_cost_usd_band_pct: int
+    estimated_worktree_count: int = Field(
+        description=(
+            "Number of Claude Code worktrees this run will spawn — one per "
+            "sentence in scope. Replaces the SDK-era estimated_cost_usd."
+        ),
+    )
     sentence_ids: list[str] = Field(
         default_factory=list,
         description="The expanded scope, in dispatch order (ordinal 1..N).",
+    )
+    chapter: int | None = Field(
+        default=None,
+        description=(
+            "For chapter-summary scope runs, the chapter number being "
+            "synthesised. None for per-sentence scope runs."
+        ),
     )
     parent_run_id: str | None = None
     created_at: str
@@ -109,12 +162,12 @@ class RunListItem(BaseModel):
     run_id: str
     status: RunStatus
     style_prompt_version: str
-    source_set_id: SourceSetId
+    source_set_id: RequestSourceSetId
     model: str
     items_count: int
     items_completed: int
     items_failed: int
-    estimated_cost_usd: float
+    estimated_worktree_count: int
     created_at: str
     completed_at: str | None = None
 
@@ -151,13 +204,18 @@ class SentenceCandidatesResponse(BaseModel):
 
 
 class RunItemSnapshot(BaseModel):
-    """Internal — used by the SSE replayer to feed events."""
+    """Internal — used by the SSE replayer to feed events.
+
+    For chapter-summary scope items, ``sentence_id`` is None and
+    ``chapter`` carries the synthesised chapter number.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     run_id: str
     ordinal: int
-    sentence_id: str
+    sentence_id: str | None = None
+    chapter: int | None = None
     status: ItemStatus
     candidate_id: int | None = None
     error_code: GenerationErrorCode | None = None

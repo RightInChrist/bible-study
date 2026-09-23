@@ -20,7 +20,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from api.tests.fakes import FakeClaudeClient
+from api.tests.fakes import FakeWorktreeSpawner
 
 
 @pytest.fixture(autouse=True)
@@ -100,7 +100,7 @@ def _wait_for_completed(client: TestClient, run_id: str, timeout: float = 5.0) -
 
 
 def test_sse_replay_completed_run_emits_all_items_then_run_finished(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
     client, _fake = runs_client
@@ -131,7 +131,7 @@ def test_sse_replay_completed_run_emits_all_items_then_run_finished(
 
 
 def test_sse_replay_in_progress_run_replays_then_attaches_live_tail(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
     """Replay-then-tail behaviour for an active run.
@@ -194,10 +194,10 @@ def test_sse_replay_in_progress_run_replays_then_attaches_live_tail(
             """
             INSERT INTO generation_runs (
                 run_id, status, scope_json, style_prompt_version,
-                source_set_id, model, estimated_cost_usd_x10000,
-                estimated_input_units, created_at, started_at
+                source_set_id, model, estimated_worktree_count,
+                created_at, started_at
             ) VALUES (?, 'running', '{}', 'literal-v1', 'BOTH_GREEK',
-                      'claude-sonnet-4-6', 0, 0,
+                      'claude-sonnet-4-6', 1,
                       '2026-05-03T00:00:00Z', '2026-05-03T00:00:00Z')
             """,
             (run_id,),

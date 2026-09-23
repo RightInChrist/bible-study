@@ -17,9 +17,16 @@ from fastapi.exceptions import RequestValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from pathlib import Path
+
 from api.admin.routes import router as admin_router
+from api.chapters.routes import router as chapters_router
+from api.claude.worktree import sweep_stale_worktrees
 from api.errors import DomainError
+from api.gsv.routes import router as gsv_router
 from api.middleware import CsrfMiddleware, HostAllowlistMiddleware
+from api.rankings.routes import router as rankings_router
+from api.red_letter.routes import router as red_letter_router
 from api.runs.routes import router as runs_router
 from api.sentences.routes import router as sentences_router
 from api.settings import get_commit_hash, get_settings
@@ -40,6 +47,16 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
     app.include_router(sentences_router)
     app.include_router(runs_router)
+    app.include_router(rankings_router)
+    app.include_router(red_letter_router)
+    app.include_router(gsv_router)
+    app.include_router(chapters_router)
+
+    # Sweep any stale worktrees a prior crashed runner left behind. Cheap
+    # no-op on a clean tree; on a crashed-mid-run startup it's the only
+    # cleanup path (no user action required).
+    base_dir = settings.project_root / Path(settings.worktree_base_dir)
+    sweep_stale_worktrees(base_dir, settings.project_root)
 
     @app.exception_handler(DomainError)
     async def _domain_handler(_request: Request, exc: DomainError) -> JSONResponse:

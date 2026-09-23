@@ -1,25 +1,26 @@
 """``POST /api/v1/runs`` happy-path + rejection tests.
 
-Slice 3a scope (Reliability test list):
+Slice 3a-redo:
   - test_create_run_with_one_sentence_scope
-  - test_create_run_rejects_when_anthropic_key_missing
-  - test_create_run_rejects_when_estimated_cost_exceeds_cap
-  - test_create_run_rejects_when_daily_cap_exceeded
+  - test_create_run_rejects_when_claude_cli_unavailable
+  - test_create_run_rejects_when_max_runs_per_day_exceeded
   - test_create_run_rejects_when_sentences_exceeds_max_per_run
   - test_csrf_required_on_post_runs
   - test_style_prompt_compatible_source_sets_validated_at_run_creation
+  - test_runs_with_first_century_jewish_v1_parses_structured_json
 
-The fake Claude client is configured to return a fixed candidate. The
-test waits for the run to settle by polling ``GET /runs/{run_id}``;
-SSE coverage lives in ``test_sse.py``.
+Model+effort flag wiring:
+  - test_runs_pass_model_and_effort_to_spawner — defaults
+  - test_runs_accept_model_and_effort_overrides — explicit overrides
 """
 from __future__ import annotations
 
+import json
 import time
 
 from fastapi.testclient import TestClient
 
-from api.tests.fakes import FakeClaudeClient
+from api.tests.fakes import FakeWorktreeSpawner
 
 
 def _wait_for_run(
@@ -47,11 +48,10 @@ def _find_sentence_id(client: TestClient, chapter: int, start_verse: int) -> str
 
 
 def test_create_run_with_one_sentence_scope(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
-    client, fake = runs_client
-    fake._candidate_text = "Blessed are the poor in spirit (fake translation)."
+    client, _fake = runs_client
     sentence_id = _find_sentence_id(client, 5, 3)
 
     response = client.post(
@@ -68,13 +68,13 @@ def test_create_run_with_one_sentence_scope(
     body = response.json()
     assert body["items_count"] == 1
     assert body["sentence_ids"] == [sentence_id]
-    assert body["estimated_cost_usd"] >= 0.0
+    assert body["estimated_worktree_count"] == 1
 
     final = _wait_for_run(client, body["run_id"], target="completed")
     assert final["items_completed"] == 1
     assert final["items_failed"] == 0
+    assert final["estimated_worktree_count"] == 1
 
-    # Candidate stored with all five identity fields.
     cand_response = client.get(f"/api/v1/sentences/{sentence_id}/candidates")
     assert cand_response.status_code == 200
     candidates = cand_response.json()["candidates"]
@@ -83,17 +83,20 @@ def test_create_run_with_one_sentence_scope(
     assert cand["sentence_id"] == sentence_id
     assert cand["style_prompt_version"] == "literal-v1"
     assert cand["source_set_id"] == "BOTH_GREEK"
-    assert cand["model"] == "claude-sonnet-4-6"
+    # The fake spawner mirrors the real one: it reports
+    # ``"{model}+{effort}"`` from the request.
+    assert cand["model"] == "claude-sonnet-4-6+xhigh"
     assert cand["generated_at"]
-    assert cand["candidate_text"].startswith("Blessed are the poor")
+    # literal-v1 is output_format=text; candidate_text is plain English.
+    assert "[fake]" in cand["candidate_text"]
 
 
-def test_create_run_rejects_when_anthropic_key_missing(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+def test_create_run_rejects_when_claude_cli_unavailable(
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
     client, fake = runs_client
-    fake._api_key_set = False
+    fake.cli_available_returns = False
     sentence_id = _find_sentence_id(client, 5, 3)
     response = client.post(
         "/api/v1/runs",
@@ -107,63 +110,34 @@ def test_create_run_rejects_when_anthropic_key_missing(
     )
     assert response.status_code == 400
     body = response.json()
-    assert body["code"] == "anthropic_key_missing"
+    assert body["code"] == "claude_cli_unavailable"
 
 
-def test_create_run_rejects_when_estimated_cost_exceeds_cap(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+def test_create_run_rejects_when_max_runs_per_day_exceeded(
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
     monkeypatch,
 ) -> None:
+    """Pre-seed the daily run cap with a synthetic generation_runs row."""
     client, _fake = runs_client
-    monkeypatch.setenv("MAX_RUN_COST_USD", "0.000001")
-    from api.settings import reset_settings_cache
-
-    reset_settings_cache()
-    sentence_id = _find_sentence_id(client, 5, 3)
-    response = client.post(
-        "/api/v1/runs",
-        json={
-            "scope": {"kind": "one_sentence", "sentence_id": sentence_id},
-            "style_prompt_version": "literal-v1",
-            "source_set_id": "BOTH_GREEK",
-            "model": "claude-sonnet-4-6",
-        },
-        headers=writable_headers,
-    )
-    assert response.status_code == 400, response.text
-    assert response.json()["code"] == "estimated_cost_exceeds_cap"
-
-
-def test_create_run_rejects_when_daily_cap_exceeded(
-    runs_client: tuple[TestClient, FakeClaudeClient],
-    writable_headers: dict[str, str],
-    monkeypatch,
-) -> None:
-    """Pre-seed a fake run consuming most of the daily cap, then post a new
-    run and expect ``daily_cost_cap_exceeded``.
-    """
-    client, _fake = runs_client
-    monkeypatch.setenv("MAX_DAILY_COST_USD", "1.0")
+    monkeypatch.setenv("MAX_RUNS_PER_DAY", "1")
     from api.settings import reset_settings_cache
 
     reset_settings_cache()
 
-    # Pre-seed a synthetic generation_runs row burning the daily budget.
     from api.db.connection import open_connection
 
     conn = open_connection()
     try:
-        # 1.0 USD = 10000 in x10000 units
         conn.execute(
             """
             INSERT INTO generation_runs (
                 run_id, status, scope_json, style_prompt_version, source_set_id,
-                model, estimated_cost_usd_x10000, estimated_input_units,
+                model, estimated_worktree_count,
                 created_at
             ) VALUES (
                 'seed-daily-cap', 'completed', '{}', 'literal-v1', 'BOTH_GREEK',
-                'claude-sonnet-4-6', 10000, 1000,
+                'claude-sonnet-4-6', 1,
                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             )
             """
@@ -183,16 +157,16 @@ def test_create_run_rejects_when_daily_cap_exceeded(
         headers=writable_headers,
     )
     assert response.status_code == 400, response.text
-    assert response.json()["code"] == "daily_cost_cap_exceeded"
+    assert response.json()["code"] == "max_runs_per_day_exceeded"
 
 
 def test_create_run_rejects_when_sentences_exceeds_max_per_run(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
     monkeypatch,
 ) -> None:
     client, _fake = runs_client
-    monkeypatch.setenv("MAX_SENTENCES_PER_RUN", "2")
+    monkeypatch.setenv("MAX_WORKTREES_PER_RUN", "2")
     from api.settings import reset_settings_cache
 
     reset_settings_cache()
@@ -208,11 +182,11 @@ def test_create_run_rejects_when_sentences_exceeds_max_per_run(
         headers=writable_headers,
     )
     assert response.status_code == 400, response.text
-    assert response.json()["code"] == "max_sentences_per_run_exceeded"
+    assert response.json()["code"] == "max_worktrees_per_run_exceeded"
 
 
 def test_csrf_required_on_post_runs(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
 ) -> None:
     client, _fake = runs_client
     sentence_id = _find_sentence_id(client, 5, 3)
@@ -222,11 +196,9 @@ def test_csrf_required_on_post_runs(
         "source_set_id": "BOTH_GREEK",
         "model": "claude-sonnet-4-6",
     }
-    # Missing Origin → 403 origin_required.
     response = client.post("/api/v1/runs", json=body, headers={"X-Requested-By": "bible-study-ui"})
     assert response.status_code == 403
     assert response.json()["code"] == "origin_required"
-    # Missing X-Requested-By → 403.
     response = client.post(
         "/api/v1/runs", json=body, headers={"Origin": "http://127.0.0.1:8000"}
     )
@@ -235,13 +207,9 @@ def test_csrf_required_on_post_runs(
 
 
 def test_style_prompt_compatible_source_sets_validated_at_run_creation(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
-    """``literal-v1`` requires Greek; using ``ENGLISH_ONLY_BSB`` must
-    fail ``compatible_source_sets`` validation **before** any Anthropic
-    call (Security §test #12).
-    """
     client, fake = runs_client
     sentence_id = _find_sentence_id(client, 5, 3)
     response = client.post(
@@ -257,3 +225,154 @@ def test_style_prompt_compatible_source_sets_validated_at_run_creation(
     assert response.status_code == 400, response.text
     assert response.json()["code"] == "incompatible_source_set"
     assert fake.calls == []
+
+
+def test_runs_with_first_century_jewish_v1_parses_structured_json(
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
+    writable_headers: dict[str, str],
+) -> None:
+    """``first-century-jewish-v1`` is ``output_format=json``.
+
+    The fake spawner returns a structured-fields stub; the runner must
+    serialise it as JSON into ``candidate_text`` so the read API can
+    parse it back into the documented shape.
+    """
+    client, _fake = runs_client
+    sentence_id = _find_sentence_id(client, 5, 3)
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "scope": {"kind": "one_sentence", "sentence_id": sentence_id},
+            "style_prompt_version": "first-century-jewish-v1",
+            "source_set_id": "BOTH_GREEK",
+            "model": "claude-opus-4-7",
+        },
+        headers=writable_headers,
+    )
+    assert response.status_code == 200, response.text
+    final = _wait_for_run(client, response.json()["run_id"], target="completed")
+    assert final["items_completed"] == 1
+
+    cand_response = client.get(f"/api/v1/sentences/{sentence_id}/candidates")
+    assert cand_response.status_code == 200
+    candidates = cand_response.json()["candidates"]
+    assert candidates, "expected at least one candidate"
+    cand = candidates[0]
+    assert cand["style_prompt_version"] == "first-century-jewish-v1"
+
+    parsed = json.loads(cand["candidate_text"])
+    expected_keys = {
+        "english",
+        "underlying_hypothesis",
+        "cultural_notes",
+        "intertexts",
+        "audience",
+        "pragmatic_act",
+        "confidence",
+    }
+    assert expected_keys.issubset(parsed.keys()), (
+        f"missing keys: {expected_keys - set(parsed.keys())}"
+    )
+    assert isinstance(parsed["intertexts"], list)
+    assert "english" in parsed and isinstance(parsed["english"], str)
+
+
+def test_runs_pass_model_and_effort_to_spawner(
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
+    writable_headers: dict[str, str],
+) -> None:
+    """When the body omits ``effort``, the schema default is forwarded."""
+    client, fake = runs_client
+    sentence_id = _find_sentence_id(client, 5, 3)
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "scope": {"kind": "one_sentence", "sentence_id": sentence_id},
+            "style_prompt_version": "literal-v1",
+            "source_set_id": "BOTH_GREEK",
+            "model": "claude-opus-4-7",
+        },
+        headers=writable_headers,
+    )
+    assert response.status_code == 200, response.text
+    run_id = response.json()["run_id"]
+    _wait_for_run(client, run_id, target="completed")
+
+    assert len(fake.calls) == 1, fake.calls
+    call = fake.calls[0]
+    assert call.model == "claude-opus-4-7"
+    assert call.effort == "xhigh"
+
+    # Run-level provenance reflects the composite.
+    run_response = client.get(f"/api/v1/runs/{run_id}").json()
+    assert run_response["model"] == "claude-opus-4-7+xhigh"
+
+    cand_response = client.get(f"/api/v1/sentences/{sentence_id}/candidates").json()
+    assert cand_response["candidates"][0]["model"] == "claude-opus-4-7+xhigh"
+
+
+def test_runs_accept_model_and_effort_overrides(
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
+    writable_headers: dict[str, str],
+) -> None:
+    """Explicit ``model`` + ``effort`` flow through to the spawner."""
+    client, fake = runs_client
+    sentence_id = _find_sentence_id(client, 5, 3)
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "scope": {"kind": "one_sentence", "sentence_id": sentence_id},
+            "style_prompt_version": "literal-v1",
+            "source_set_id": "BOTH_GREEK",
+            "model": "claude-sonnet-4-6",
+            "effort": "high",
+        },
+        headers=writable_headers,
+    )
+    assert response.status_code == 200, response.text
+    run_id = response.json()["run_id"]
+    _wait_for_run(client, run_id, target="completed")
+
+    assert len(fake.calls) == 1, fake.calls
+    call = fake.calls[0]
+    assert call.model == "claude-sonnet-4-6"
+    assert call.effort == "high"
+
+    run_response = client.get(f"/api/v1/runs/{run_id}").json()
+    assert run_response["model"] == "claude-sonnet-4-6+high"
+
+    cand_response = client.get(f"/api/v1/sentences/{sentence_id}/candidates").json()
+    assert cand_response["candidates"][0]["model"] == "claude-sonnet-4-6+high"
+
+
+def test_runs_use_default_model_and_effort_when_omitted(
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
+    writable_headers: dict[str, str],
+) -> None:
+    """Body without ``model``/``effort`` falls back to schema defaults."""
+    client, fake = runs_client
+    sentence_id = _find_sentence_id(client, 5, 3)
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "scope": {"kind": "one_sentence", "sentence_id": sentence_id},
+            "style_prompt_version": "literal-v1",
+            "source_set_id": "BOTH_GREEK",
+        },
+        headers=writable_headers,
+    )
+    assert response.status_code == 200, response.text
+    run_id = response.json()["run_id"]
+    _wait_for_run(client, run_id, target="completed")
+
+    assert len(fake.calls) == 1
+    call = fake.calls[0]
+    assert call.model == "claude-opus-4-7"
+    assert call.effort == "xhigh"
+
+    cand_response = client.get(f"/api/v1/sentences/{sentence_id}/candidates").json()
+    assert cand_response["candidates"][0]["model"] == "claude-opus-4-7+xhigh"

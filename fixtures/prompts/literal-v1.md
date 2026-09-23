@@ -3,6 +3,7 @@ name: literal
 version: literal-v1
 description: Wooden, formal-equivalence translation that prioritises preserving Greek word order, syntax, and morphological detail over English readability.
 requires_greek: true
+output_format: text
 compatible_source_sets:
   - SBLGNT_ONLY
   - BYZ_ONLY
@@ -24,5 +25,7 @@ Translation rules (in priority order):
 6. Vocabulary: prefer the most concrete sense of each word. πτωχός is "poor", not "humble"; μακάριος is "blessed", not "happy".
 7. Do **not** introduce interpretive expansion. If the Greek is ambiguous, the English should be ambiguous in the same way.
 8. Do **not** add transitional phrases ("Now, then, So") that aren't in the Greek.
+
+You may receive `context_before` and `context_after` arrays of adjacent SBLGNT sentences for context only. Translate **only** the focal sentence (the top-level bundle fields); do not translate or include the context sentences in your output.
 
 Output format: a single English sentence (or set of sentences if the Greek punctuation forces it). No commentary, no quotation marks around the translation, no notes — just the rendering.

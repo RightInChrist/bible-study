@@ -1,8 +1,10 @@
 ---
 name: first-century-jewish
 version: first-century-jewish-v1
-description: Cultural-and-linguistic-grounding translation. Treats the Greek as a translation layer over a likely Aramaic original, situates the speech in first-century Galilean Judaism under Roman occupation, surfaces underlying-language hypothesis and cultural pragmatics as first-class output. Primary lens for this project.
+description: Cultural-and-linguistic-grounding translation, pericope-aware. Treats the Greek as a translation layer over a likely Aramaic original, situates the speech in first-century Galilean Judaism under Roman occupation, frames the focal sentence within its surrounding pericope using a context window of adjacent sentences, surfaces underlying-language hypothesis and cultural pragmatics as first-class output. Primary lens for this project.
 requires_greek: true
+output_format: json
+wants_context_window: true
 compatible_source_sets:
   - BOTH_GREEK
   - GREEK_PLUS_BIB
@@ -48,6 +50,51 @@ For every sentence, ask:
 - **Who is being addressed?** Disciples (insiders), crowds (broad), opponents (Pharisees, scribes, Sadducees, Herodians), an individual, no one in particular. The audience constrains the meaning.
 - **What is the speech doing?** Teaching (didactic), rebuking, blessing, cursing, prophesying, performing (creating a state of affairs by uttering it), naming, commissioning, drawing an insider/outsider boundary, redrawing one, baiting opponents, evading a trap, lamenting. Speech acts have form; recognize the form.
 - **What is the immediate situation?** Where, when, in response to what. Matthew gives us scene cues; use them.
+
+## Context window
+
+You will receive the **focal sentence** to translate plus a small window of
+**adjacent sentences for context only**. The bundle structure makes this
+explicit: the focal sentence is the top-level bundle (its `sentence_id`,
+`sblgnt`, optional `byzantine_verses` / `bib_interlinear` / `bsb_verses` /
+`blb_verses`, etc. — the rich fields you actually translate from); the
+adjacent context lives under a single `adjacent_context` object with two
+arrays — `adjacent_context.before` (sentences canonically before the focal,
+in ascending order, closest neighbour last) and `adjacent_context.after`
+(sentences canonically after the focal, in ascending order, closest neighbour
+first). Each adjacent entry carries `sentence_id`, `chapter`,
+`ordinal_in_chapter`, `start_verse`, `end_verse`, `text_sblgnt`, and
+`is_red_letter`, plus a readable English line under `bsb_text` (the BSB
+translation for the verse range that adjacent sentence covers — `null` if
+no BSB rows match). Their smaller shape signals clearly that they are NOT
+the translation target.
+
+The window may cross chapter boundaries — pericopes don't always respect
+chapter divisions (Matt 4:25 → Matt 5:1 is the canonical example). Use
+each adjacent entry's `chapter` field to recognise when context comes
+from a neighbouring chapter.
+
+Use the context to:
+- Recognize when the focal sentence is part of a larger pericope (e.g., one of
+  the Antitheses, one petition of the Lord's Prayer, one beatitude in a series).
+  Frame the focal sentence within that pericope where it changes the reading.
+- Identify the immediate scene cues — narrator-introduced settings,
+  audience-shifts, response cues — when the surrounding text gives them. The
+  `bsb_text` field on each adjacent entry is there to spare you re-translating
+  context just to get pericope orientation; lean on it.
+- Distinguish the focal sentence's audience from a different audience nearby,
+  if Matthew has shifted addressees mid-section.
+- Note when an adjacent context sentence is `is_red_letter: false` (narrator
+  framing) versus `is_red_letter: true` (Jesus continuing to speak); this
+  affects whether the surrounding cues are scene-setting or further teaching.
+
+Do NOT translate the context sentences. Do NOT include them in your output. Do
+NOT pretend you weren't shown them. The focal sentence is the only sentence you
+produce a JSON object for.
+
+If `adjacent_context` is missing entirely, or `adjacent_context.before` /
+`adjacent_context.after` is empty (focal sentence is near the start or end
+of the corpus), work with what you have.
 
 ## Output format
 

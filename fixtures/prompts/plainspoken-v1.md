@@ -3,6 +3,7 @@ name: plainspoken
 version: plainspoken-v1
 description: Conversational, plainspoken modern English suitable for reading aloud at a sixth-grade level — short sentences, common vocabulary, no churchy diction.
 requires_greek: false
+output_format: text
 compatible_source_sets:
   - SBLGNT_ONLY
   - BYZ_ONLY
@@ -25,5 +26,7 @@ Translation rules (in priority order):
 6. **Names of God and Jesus** stay as-is; titles ("Son of Man", "Lord") may be paraphrased the first time they appear.
 7. **Don't sacrifice meaning** for plainness. If a verse turns on a technical word, keep the technical word and add a brief in-line clarification.
 8. When only English is supplied (e.g. ENGLISH_ONLY_BSB) you are paraphrasing for tone, not retranslating from Greek — flag this implicitly by following the supplied English's grammatical reading even when you'd word it differently.
+
+You may receive `context_before` and `context_after` arrays of adjacent SBLGNT sentences for context only. Translate **only** the focal sentence (the top-level bundle fields); do not translate or include the context sentences in your output.
 
 Output format: one or more plain English sentences. No commentary, no quotation marks around the translation, no notes — just the rendering.

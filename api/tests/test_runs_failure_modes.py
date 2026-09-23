@@ -1,26 +1,23 @@
 """Per-item failure modes from the runner (Reliability §Failure modes).
 
-Slice 3a:
-  - test_anthropic_429_marks_item_failed_with_rate_limit_error_code
-  - test_anthropic_5xx_marks_item_failed_with_anthropic_api_error
+Slice 3a-redo (worktree mechanism):
+  - test_timeout_marks_item_failed_with_timeout_error_code
+  - test_internal_error_marks_item_failed
   - test_invalid_response_marks_item_failed
-  - test_hidden_combo_skips_anthropic_call
+  - test_hidden_combo_skips_subagent_call
   - test_per_sentence_transactions_isolate_failures
   - test_source_snapshot_dedup_via_content_addressing
-
-These all rely on ``runs_client`` injecting :class:`FakeClaudeClient`
-with a custom ``responder`` callback so we can shape failures
-per-sentence.
 """
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from api.claude.client import AnthropicGenerationError, ClaudeCallRequest
-from api.claude.schemas import CandidateGenerated
-from api.tests.fakes import FakeClaudeClient
+from api.claude.schemas import WorktreeResult
+from api.claude.worktree import WorktreeGenerationError
+from api.tests.fakes import FakeSpawnerCall, FakeWorktreeSpawner
 
 
 def _wait_run_settled(
@@ -63,11 +60,6 @@ def _find_sentence_id(client: TestClient, start_verse: int) -> str:
 
 
 def _last_item_status(client: TestClient, run_id: str) -> dict:
-    """Return the (only) item's status by querying via a follow-up route.
-
-    There's no read API for raw items in this slice; we open the DB
-    directly to inspect what the runner committed.
-    """
     from api.db.connection import open_connection
 
     conn = open_connection()
@@ -85,53 +77,53 @@ def _last_item_status(client: TestClient, run_id: str) -> dict:
         conn.close()
 
 
-def test_anthropic_429_marks_item_failed_with_rate_limit_error_code(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+def test_timeout_marks_item_failed_with_timeout_error_code(
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
     client, fake = runs_client
 
-    async def responder(_req: ClaudeCallRequest) -> CandidateGenerated:
-        raise AnthropicGenerationError("rate_limit", "anthropic 429")
+    async def responder(_call: FakeSpawnerCall) -> WorktreeResult:
+        raise WorktreeGenerationError("timeout", "claude CLI exceeded 300s timeout")
 
-    fake._responder = responder
+    fake.responder = responder
     sentence_id = _find_sentence_id(client, 3)
     body = _post_one_sentence(client, writable_headers, sentence_id)
     _wait_run_settled(client, body["run_id"])
     item = _last_item_status(client, body["run_id"])
     assert item["status"] == "failed"
-    assert item["error_code"] == "rate_limit"
+    assert item["error_code"] == "timeout"
     assert item["candidate_id"] is None
 
 
-def test_anthropic_5xx_marks_item_failed_with_anthropic_api_error(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+def test_internal_error_marks_item_failed(
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
     client, fake = runs_client
 
-    async def responder(_req: ClaudeCallRequest) -> CandidateGenerated:
-        raise AnthropicGenerationError("anthropic_api_error", "anthropic 503")
+    async def responder(_call: FakeSpawnerCall) -> WorktreeResult:
+        raise WorktreeGenerationError("internal", "git worktree add failed")
 
-    fake._responder = responder
+    fake.responder = responder
     sentence_id = _find_sentence_id(client, 3)
     body = _post_one_sentence(client, writable_headers, sentence_id)
     _wait_run_settled(client, body["run_id"])
     item = _last_item_status(client, body["run_id"])
     assert item["status"] == "failed"
-    assert item["error_code"] == "anthropic_api_error"
+    assert item["error_code"] == "internal"
 
 
 def test_invalid_response_marks_item_failed(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
     client, fake = runs_client
 
-    async def responder(_req: ClaudeCallRequest) -> CandidateGenerated:
-        raise AnthropicGenerationError("invalid_response", "empty content blocks")
+    async def responder(_call: FakeSpawnerCall) -> WorktreeResult:
+        raise WorktreeGenerationError("invalid_response", "stdout was not valid JSON")
 
-    fake._responder = responder
+    fake.responder = responder
     sentence_id = _find_sentence_id(client, 3)
     body = _post_one_sentence(client, writable_headers, sentence_id)
     _wait_run_settled(client, body["run_id"])
@@ -140,14 +132,13 @@ def test_invalid_response_marks_item_failed(
     assert item["error_code"] == "invalid_response"
 
 
-def test_hidden_combo_skips_anthropic_call(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+def test_hidden_combo_skips_subagent_call(
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
     client, fake = runs_client
     sentence_id = _find_sentence_id(client, 3)
 
-    # Insert a hidden_combos row matching the run combo.
     from api.db.connection import open_connection
 
     conn = open_connection()
@@ -156,7 +147,7 @@ def test_hidden_combo_skips_anthropic_call(
             """
             INSERT INTO hidden_combos
               (sentence_id, style_prompt_version, source_set_id, model, hidden_at)
-            VALUES (?, 'literal-v1', 'BOTH_GREEK', 'claude-sonnet-4-6',
+            VALUES (?, 'literal-v1', 'BOTH_GREEK', 'claude-sonnet-4-6+xhigh',
                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             """,
             (sentence_id,),
@@ -167,36 +158,35 @@ def test_hidden_combo_skips_anthropic_call(
     body = _post_one_sentence(client, writable_headers, sentence_id)
     _wait_run_settled(client, body["run_id"])
     item = _last_item_status(client, body["run_id"])
-    # Hidden-combo skips are recorded as ``cancelled`` so the schema's
-    # CHECK constraint is satisfied (no error_code on a non-failed status).
     assert item["status"] == "cancelled"
     assert item["candidate_id"] is None
-    assert fake.calls == [], "Anthropic must not be called for hidden combos"
+    assert fake.calls == [], "subagent must not be invoked for hidden combos"
 
 
 def test_per_sentence_transactions_isolate_failures(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
     """One sentence fails; the other in the same run still completes."""
     client, fake = runs_client
 
     failing_sentence_id = _find_sentence_id(client, 3)
-    succeeding_sentence_id = _find_sentence_id(client, 4)
 
-    async def responder(req: ClaudeCallRequest) -> CandidateGenerated:
-        if req.bundle.sentence_id == failing_sentence_id:
-            raise AnthropicGenerationError("anthropic_api_error", "boom")
-        from datetime import UTC, datetime
-
-        return CandidateGenerated(
-            candidate_text="ok",
-            model=req.model,
-            generated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            latency_ms=2,
+    async def responder(call: FakeSpawnerCall) -> WorktreeResult:
+        if call.bundle.sentence_id == failing_sentence_id:
+            raise WorktreeGenerationError("internal", "boom")
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        return WorktreeResult(
+            raw_output="ok",
+            parsed_candidate={"english": "ok"},
+            model=f"{call.model}+{call.effort}",
+            cli_version="claude-code-test-fake",
+            started_at=now,
+            completed_at=now,
+            elapsed_seconds=0.001,
         )
 
-    fake._responder = responder
+    fake.responder = responder
 
     response = client.post(
         "/api/v1/runs",
@@ -216,16 +206,11 @@ def test_per_sentence_transactions_isolate_failures(
 
 
 def test_source_snapshot_dedup_via_content_addressing(
-    runs_client: tuple[TestClient, FakeClaudeClient],
+    runs_client: tuple[TestClient, FakeWorktreeSpawner],
     writable_headers: dict[str, str],
 ) -> None:
-    """Run the same combo twice on the same sentence.
-
-    Asserts: two ``claude_candidates`` rows but exactly one
-    ``source_snapshots`` row referenced by both.
-    """
-    client, fake = runs_client
-    fake._candidate_text = "deterministic-fake"
+    """Run the same combo twice on the same sentence."""
+    client, _fake = runs_client
     sentence_id = _find_sentence_id(client, 3)
 
     body1 = _post_one_sentence(client, writable_headers, sentence_id)
@@ -249,7 +234,7 @@ def test_source_snapshot_dedup_via_content_addressing(
             """
             SELECT candidate_id, source_snapshot_hash FROM claude_candidates
             WHERE sentence_id=? AND style_prompt_version='literal-v1'
-              AND source_set_id='BOTH_GREEK' AND model='claude-sonnet-4-6'
+              AND source_set_id='BOTH_GREEK'
             """,
             (sentence_id,),
         ).fetchall()
